@@ -1,0 +1,4 @@
+# Python cache folders and files
+__pycache__/
+# Pytest cache directories
+.pytest_cache/
