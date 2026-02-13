@@ -6,17 +6,14 @@ only, excluding the main hash() method and focusing on the internal implementati
 details using pytest framework.
 """
 
-import hashlib
-import struct
 import subprocess
 import sys
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.append("..")
-from kheavyhash import kheavyhash as khRefrance
 from kheavyhash_ref import KHeavyhash
 
 

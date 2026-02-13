@@ -1,25 +1,4 @@
-"""
-KHeavyhash Reference Implementation - Class Boilerplate
-======================================================
-
-This module contains the reference implementation of the kHeavyHash proof-of-work
-algorithm used by Kaspa cryptocurrency. This is a boilerplate with method stubs
-and comprehensive documentation for each component.
-
-kHeavyHash is a memory-hard, core-dominant PoW algorithm that combines:
-- cSHAKE256 cryptographic hashing with domain separation
-- 64x64 matrix multiplication operations using 4-bit elements
-- xoshiro256++ pseudorandom number generation for matrix seeding
-
-Key Algorithm Flow:
-1. Construct 80-byte header from inputs
-2. Hash with cSHAKE256 using "ProofOfWorkHash" domain
-3. Generate 64x64 full-rank matrix from PrePowHash using xoshiro256++
-4. Create 64-element vector from hash result
-5. Perform matrix-vector multiplication with normalization
-6. XOR result with original hash
-7. Final cSHAKE256 hash with "HeavyHash" domain
-"""
+"""kHeavyHash proof-of-work algorithm implementation for Kaspa."""
 
 import hashlib
 import random
@@ -45,21 +24,10 @@ from Crypto.Util._raw_api import (
 
 
 class KHeavyhash:
-    """
-    KHeavyhash proof-of-work algorithm implementation.
-
-    This class implements the complete kHeavyHash algorithm as specified
-    in the Kaspa protocol. The algorithm is designed to be memory-hard
-    and core-dominant while remaining efficient on general-purpose hardware.
-    """
+    """KHeavyHash proof-of-work algorithm for Kaspa."""
 
     def __init__(self):
-        """
-        Initialize the KHeavyhash instance.
-
-        Sets up internal state and prepares for hash computation.
-        No pre-computation is done here to keep the class lightweight.
-        """
+        """Initialize with empty matrix cache."""
         self._cached_matrix = None
         self._cached_prepow_hash = None
 
@@ -105,23 +73,7 @@ class KHeavyhash:
     def _construct_header(
         self, pre_pow_hash: bytes, timestamp: int, nonce: int
     ) -> bytes:
-        """
-        Construct the 80-byte header from input components.
-
-        Header format:
-        - pre_pow_hash: 32 bytes (pre-computed block hash)
-        - timestamp: 8 bytes (little-endian uint64)
-        - padding: 32 bytes (all zeros)
-        - nonce: 8 bytes (little-endian uint64)
-
-        Args:
-            pre_pow_hash: 32-byte block hash
-            timestamp: UNIX timestamp
-            nonce: Mining nonce
-
-        Returns:
-            80-byte concatenated header
-        """
+        """Construct 80-byte header: pre_pow_hash + timestamp + 32 zero bytes + nonce."""
         if len(pre_pow_hash) != 32:
             raise ValueError("pre_pow_hash must be exactly 32 bytes")
 
@@ -129,7 +81,6 @@ class KHeavyhash:
         timestamp_bytes = struct.pack("<Q", timestamp)
         nonce_bytes = struct.pack("<Q", nonce)
 
-        # Construct 80-byte header: pre_pow_hash + timestamp + padding + nonce
         header = pre_pow_hash + timestamp_bytes + b"\x00" * 32 + nonce_bytes
 
         return header
@@ -158,21 +109,21 @@ class KHeavyhash:
         """
 
         def left_encode(x):
-            """Left encode function as defined in NIST SP 800-185"""
+            """NIST SP 800-185 left_encode."""
             if x == 0:
                 return b"\x01\x00"
             n = (x.bit_length() + 7) // 8
             return bytes([n]) + x.to_bytes(n, "big")
 
         def encode_string(s):
-            """Encode string function as defined in NIST SP 800-185"""
+            """NIST SP 800-185 encode_string."""
             if isinstance(s, str):
                 s = s.encode("utf-8")
             bitlen = len(s) * 8
             return left_encode(bitlen) + s
 
         def bytepad(x, w):
-            """Bytepad function as defined in NIST SP 800-185"""
+            """NIST SP 800-185 bytepad."""
             z = left_encode(w) + x
             # Pad with zeros to make length a multiple of w
             npad = (w - len(z) % w) % w
@@ -197,7 +148,7 @@ class KHeavyhash:
         # Per spec: if both N and S are empty, use SHAKE256 with padding 0x1F
         # Otherwise use cSHAKE256 with padding 0x04
         #
-        # IMPORTANT: Reference implementation ignores function_name and only uses customization
+        # Reference implementation ignores function_name and only uses customization
         # So we check only customization to match the reference behavior
         if customization:
             # Build cSHAKE prefix: bytepad(encode_string(N) || encode_string(S), rate)
@@ -257,7 +208,7 @@ class KHeavyhash:
         """
         # Note: cSHAKE256 in PyCryptodome takes custom parameter which is S (customization)
         # We need to use the customization parameter, not function_name
-        # Based on Go code: NewCShake256(nil, domain) means N=nil, S=domain
+        # Based on Go implementation: NewCShake256(nil, domain) means N=nil, S=domain
         shake = cSHAKE256.new(
             custom=customization.encode("utf-8") if customization else b""
         )
@@ -270,7 +221,7 @@ class KHeavyhash:
         """
         Generate a 64x64 full-rank matrix from PrePowHash using xoshiro256++.
 
-        CRITICAL: Matrix is seeded from PrePowHash (first 32 bytes of input),
+        Matrix is seeded from PrePowHash (first 32 bytes of input),
         NOT from the cSHAKE256 result. This allows matrix reuse across nonces.
 
         The matrix contains 16-bit unsigned integers storing 4-bit values (0-15).
@@ -300,7 +251,7 @@ class KHeavyhash:
         state = self._init_xoshiro256pp(pre_pow_hash)
 
         # Attempt to generate full-rank matrix
-        for attempt in range(1000):  # Max attempts to avoid infinite loop
+        for attempt in range(1000):  # To avoid infinite loop
             matrix = []
 
             # Generate 64x64 matrix with 4-bit elements
@@ -356,9 +307,6 @@ class KHeavyhash:
         """
         Generate next 64-bit pseudorandom number using xoshiro256++.
 
-        This is a high-quality, fast PRNG with 256-bit state and 2^256-1 period.
-        It passes BigCrush and PractRand statistical tests.
-
         Args:
             state: List of 4 uint64 values (modified in-place)
 
@@ -412,7 +360,7 @@ class KHeavyhash:
         eps = 1e-9  # Epsilon for floating-point comparison
         n = len(matrix)
 
-        # Convert integer matrix to floating-point (matches Go implementation)
+        # Convert integer matrix to floating-point (To match Go implementation)
         B = [[float(matrix[i][j]) for j in range(n)] for i in range(n)]
 
         rank = 0
@@ -534,8 +482,6 @@ class KHeavyhash:
         """
         Rotate a 64-bit integer left by specified number of bits.
 
-        Used by xoshiro256++ PRNG for state mixing.
-
         Args:
             value: 64-bit integer to rotate
             shift: Number of bits to rotate left
@@ -551,15 +497,11 @@ class KHeavyhash:
         Cache a pre-computed matrix for the given PrePowHash.
 
         This optimization allows miners to compute the matrix once per block
-        and reuse it for all nonce attempts, significantly improving performance.
+        and reuse it for all nonce attempts.
 
         Args:
             pre_pow_hash: 32-byte PrePowHash used as matrix seed
             matrix: Pre-computed 64x64 matrix
-
-        Note:
-            The cached matrix will be used automatically by hash() method
-            when the same PrePowHash is encountered.
         """
         self._cached_prepow_hash = pre_pow_hash
         self._cached_matrix = matrix
@@ -567,23 +509,12 @@ class KHeavyhash:
     def clear_matrix_cache(self):
         """
         Clear the cached matrix to free memory.
-
-        Should be called when switching to a new block (different PrePowHash)
-        or when memory usage needs to be minimized.
         """
         self._cached_matrix = None
         self._cached_prepow_hash = None
 
     def get_cached_matrix(self, pre_pow_hash: bytes) -> Optional[List[List[int]]]:
-        """
-        Retrieve cached matrix for the given PrePowHash if available.
-
-        Args:
-            pre_pow_hash: 32-byte PrePowHash to look up
-
-        Returns:
-            Cached 64x64 matrix if available, None otherwise
-        """
+        """Return cached matrix if available for given pre_pow_hash."""
         if self._cached_prepow_hash == pre_pow_hash:
             return self._cached_matrix
         return None
