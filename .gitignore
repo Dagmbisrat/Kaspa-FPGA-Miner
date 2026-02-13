@@ -2,3 +2,7 @@
 __pycache__/
 # Pytest cache directories
 .pytest_cache/
+
+# Simulation waveform dumps
+*.vcd
+*_tb
