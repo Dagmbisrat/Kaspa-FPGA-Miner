@@ -1,7 +1,8 @@
 MODULE = xoshiro256pp
 SRC    = $(MODULE).sv
 TB     = $(MODULE)_tb.sv
-OUT    = $(MODULE)_tb
+TOP    = $(MODULE)_tb
+OBJDIR = /tmp/xoshiro_build
 VECTORS = expected_vectors.mem
 
 .PHONY: all clean wave vectors help
@@ -17,11 +18,11 @@ vectors:
 	python3 gen_vectors.py
 
 runtest: vectors
-	iverilog -g2012 -o $(OUT) $(SRC) $(TB)
-	vvp $(OUT)
+	verilator --binary --timing --trace -j 0 -Wno-fatal --top-module $(TOP) --Mdir $(OBJDIR) $(SRC) $(TB)
+	$(OBJDIR)/V$(TOP)
 
 wave: runtest
-	gtkwave $(OUT).vcd
+	gtkwave $(TOP).vcd
 
 clean:
-	rm -f $(OUT) $(OUT).vcd $(VECTORS)
+	rm -rf $(OBJDIR) $(TOP).vcd $(VECTORS)
