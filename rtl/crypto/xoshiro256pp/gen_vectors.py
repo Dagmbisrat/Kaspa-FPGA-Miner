@@ -1,6 +1,12 @@
 """Generate test vectors for xoshiro256pp SystemVerilog testbench."""
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'software', 'referance'))
+
+import os
+import sys
+
+sys.path.insert(
+    0,
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "software", "referance"),
+)
 
 from kheavyhash_ref import KHeavyhash
 
@@ -19,6 +25,8 @@ with open(os.path.join(out_dir, "expected_vectors.mem"), "w") as f:
     f.write(f"// iterations: out s0 s1 s2 s3\n")
     for i in range(NUM_ITERS):
         result = kh._xoshiro256pp_next(state)
-        f.write(f"{result:016X} {state[0]:016X} {state[1]:016X} {state[2]:016X} {state[3]:016X}\n")
+        f.write(
+            f"{result:016X} {state[0]:016X} {state[1]:016X} {state[2]:016X} {state[3]:016X}\n"
+        )
 
 print(f"Generated {NUM_ITERS} test vectors to expected_vectors.mem")

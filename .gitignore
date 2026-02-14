@@ -7,3 +7,12 @@ __pycache__/
 *.vcd
 *_tb
 *.mem
+
+# Verilator build output
+obj_dir/
+
+# Environment variables
+.env
+
+# Zed files
+.Zed
