@@ -4,19 +4,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'so
 
 from kheavyhash_ref import KHeavyhash
 
+NUM_ITERS = 10
+SEED = [0x1234567890ABCDEF, 0xFEDCBA0987654321, 0xA5A5A5A5A5A5A5A5, 0x5A5A5A5A5A5A5A5A]
+
 kh = KHeavyhash()
+state = list(SEED)
 
-# Same seed as testbench
-state = [0x1234567890ABCDEF, 0xFEDCBA0987654321, 0xA5A5A5A5A5A5A5A5, 0x5A5A5A5A5A5A5A5A]
+out_dir = os.path.dirname(os.path.abspath(__file__))
 
-for i in range(10):
-    s0, s1, s2, s3 = state
-    result = kh._xoshiro256pp_next(state)
+with open(os.path.join(out_dir, "expected_vectors.mem"), "w") as f:
+    # Line 0: seed values (s0 s1 s2 s3)
+    f.write(f"// seed: s0 s1 s2 s3\n")
+    f.write(f"{SEED[0]:016X} {SEED[1]:016X} {SEED[2]:016X} {SEED[3]:016X}\n")
+    f.write(f"// iterations: out s0 s1 s2 s3\n")
+    for i in range(NUM_ITERS):
+        result = kh._xoshiro256pp_next(state)
+        f.write(f"{result:016X} {state[0]:016X} {state[1]:016X} {state[2]:016X} {state[3]:016X}\n")
 
-    print(f"// Iteration {i}")
-    print(f"expected_out[{i}] = 64'h{result:016X};")
-    print(f"expected_s0[{i}]  = 64'h{state[0]:016X};")
-    print(f"expected_s1[{i}]  = 64'h{state[1]:016X};")
-    print(f"expected_s2[{i}]  = 64'h{state[2]:016X};")
-    print(f"expected_s3[{i}]  = 64'h{state[3]:016X};")
-    print()
+print(f"Generated {NUM_ITERS} test vectors to expected_vectors.mem")

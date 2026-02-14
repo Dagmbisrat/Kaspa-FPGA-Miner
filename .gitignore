@@ -6,3 +6,4 @@ __pycache__/
 # Simulation waveform dumps
 *.vcd
 *_tb
+*.mem
