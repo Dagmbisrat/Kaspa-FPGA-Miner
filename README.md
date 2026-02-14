@@ -4,7 +4,7 @@ An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algor
 
 This project explores efficient, memory-hard mining on FPGA using custom HDL, on-chip BRAM optimization, and a modular hardware/software interface.
 
-> ⚠️ **Status:** Work in progress – functional correctness first, performance optimization later.
+> ⚠️ **Status:** Work in progress 
 
 ---
 
@@ -15,10 +15,3 @@ This project explores efficient, memory-hard mining on FPGA using custom HDL, on
 - Provide full verification against software reference models
 - Document design decisions clearly (education-focused)
 - Serve as a strong open-source FPGA portfolio project
-
-
----
-
-## License
-
-MIT License – see `LICENSE`.
