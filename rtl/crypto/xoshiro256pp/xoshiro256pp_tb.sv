@@ -56,10 +56,10 @@ initial begin
     #1 rst = 0;
 
     // Load seed from vectors[0]
-    s0 = `VEC_OUT(0);  // seed row: s0 s1 s2 s3 stored in out/s0/s1/s2 slots
-    s1 = `VEC_S0(0);
-    s2 = `VEC_S1(0);
-    s3 = `VEC_S2(0);
+    s0 = `VEC_S0(0);
+    s1 = `VEC_S1(0);
+    s2 = `VEC_S2(0);
+    s3 = `VEC_S3(0);
 
     // Run iterations, compare against expected
     for (i = 0; i < NUM_ITERS; i = i + 1) begin

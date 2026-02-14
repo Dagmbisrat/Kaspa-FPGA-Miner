@@ -19,14 +19,14 @@ state = list(SEED)
 out_dir = os.path.dirname(os.path.abspath(__file__))
 
 with open(os.path.join(out_dir, "expected_vectors.mem"), "w") as f:
-    # Line 0: seed values (s0 s1 s2 s3)
-    f.write(f"// seed: s0 s1 s2 s3\n")
-    f.write(f"{SEED[0]:016X} {SEED[1]:016X} {SEED[2]:016X} {SEED[3]:016X}\n")
+    # Line 0: seed values (out=0, s0, s1, s2, s3) packed as one 320-bit hex word
+    f.write(f"// seed: out s0 s1 s2 s3\n")
+    f.write(f"{0:016X}{SEED[0]:016X}{SEED[1]:016X}{SEED[2]:016X}{SEED[3]:016X}\n")
     f.write(f"// iterations: out s0 s1 s2 s3\n")
     for i in range(NUM_ITERS):
         result = kh._xoshiro256pp_next(state)
         f.write(
-            f"{result:016X} {state[0]:016X} {state[1]:016X} {state[2]:016X} {state[3]:016X}\n"
+            f"{result:016X}{state[0]:016X}{state[1]:016X}{state[2]:016X}{state[3]:016X}\n"
         )
 
 print(f"Generated {NUM_ITERS} test vectors to expected_vectors.mem")
