@@ -21,7 +21,7 @@ reducing the design to a compact two-absorb FSM.
 | Variable **N** string  | N = `""` always       | `encode_string(N)` becomes constant `01 00` |
 | Variable **S** string  | S = one of two values | 1-bit MUX between two `localparam`s         |
 | Variable output length | Always 256 bits       | No squeeze loop — read first 4 lanes        |
-| Multi-block input      | Always 256-bit input  | Single absorb block, no length tracking     |
+| Multi-block input      | 80B or 32B input      | Single absorb block, muxed pad offset       |
 
 ---
 
@@ -40,20 +40,22 @@ Orchestrates prefix encoding and data absorption through two calls to the absorb
 │   clk          ───►  hash_out [255:0]                   │
 │   rst          ───►  done                               │
 │   start                                                 │
-│   data_in [255:0]                                       │
+│   data_in [639:0]                                       │
+│   data_80byte                                           │
 │   s_value                                               │
 └─────────────────────────────────────────────────────────┘
 ```
 
-| Port       | Dir | Width | Description                                         |
-|:---------- |:---:|:-----:|:--------------------------------------------------- |
-| `clk`      | in  | 1     | Clock                                               |
-| `rst`      | in  | 1     | Async reset                                         |
-| `start`    | in  | 1     | Begin hashing                                       |
-| `data_in`  | in  | 256   | Input data (header hash or digest)                  |
-| `s_value`  | in  | 1     | **0** = `"ProofOfWorkHash"` , **1** = `"HeavyHash"` |
-| `hash_out` | out | 256   | cSHAKE256 result                                    |
-| `done`     | out | 1     | High for one cycle when hash is ready               |
+| Port          | Dir | Width | Description                                         |
+|:------------- |:---:|:-----:|:--------------------------------------------------- |
+| `clk`         | in  | 1     | Clock                                               |
+| `rst`         | in  | 1     | Async reset                                         |
+| `start`       | in  | 1     | Begin hashing                                       |
+| `data_in`     | in  | 640   | Input data (80B header or 32B digest, zero-padded)  |
+| `data_80byte` | in  | 1     | **0** = 32-byte input, **1** = 80-byte input        |
+| `s_value`     | in  | 1     | **0** = `"ProofOfWorkHash"` , **1** = `"HeavyHash"` |
+| `hash_out`    | out | 256   | cSHAKE256 result                                    |
+| `done`        | out | 1     | High for one cycle when hash is ready               |
 
 ### `cshake256_absorb` — Absorb Sub-Module
 
@@ -158,10 +160,10 @@ prefix **combinationally** in `ENCODE_PREFIX` — no runtime encoding needed:
  │  s_value    │  S String            │  Usage in kHeavyHash              │
  ├─────────────┼──────────────────────┼───────────────────────────────────┤
  │     0       │  "ProofOfWorkHash"   │  First hash:  cSHAKE256(header)   │
- │             │  15 bytes, 120 bits  │                                   │
+ │             │  15 bytes, 120 bits  │  80-byte input (data_80byte = 1)  │
  ├─────────────┼──────────────────────┼───────────────────────────────────┤
  │     1       │  "HeavyHash"         │  Final hash:  cSHAKE256(digest)   │
- │             │   9 bytes,  72 bits  │                                   │
+ │             │   9 bytes,  72 bits  │  32-byte input (data_80byte = 0)  │
  └─────────────┴──────────────────────┴───────────────────────────────────┘
 ```
 
@@ -172,14 +174,23 @@ the absorb buffer by the single `s_value` bit.
 
 ## Data Block Padding (`ABSORB_INPUT`)
 
-The 256-bit input is placed at the bottom of the 1088-bit absorb buffer with
-cSHAKE256 domain-separation padding:
+The input is placed at the bottom of the 1088-bit absorb buffer with
+cSHAKE256 domain-separation padding. The `0x04` byte position depends on
+the input size, selected by `data_80byte`:
 
 ```
+  80-byte input (data_80byte = 1):
+  1087                           647  639                          0
+  ┌──────┬───────────────────────┬────┬────────────────────────────┐
+  │ 0x80 │     0x00 ... 00      │0x04│         data_in            │
+  │      │   (implicit zeros)   │    │        (640 bits)          │
+  └──────┴───────────────────────┴────┴────────────────────────────┘
+
+  32-byte input (data_80byte = 0):
   1087                                 263  255                    0
   ┌──────┬─────────────────────────────┬────┬──────────────────────┐
   │ 0x80 │        0x00 ... 00          │0x04│      data_in         │
-  │      │      (implicit zeros)       │    │     (256 bits)       │
+  │      │      (implicit zeros)       │    │   (256 bits used)    │
   └──────┴─────────────────────────────┴────┴──────────────────────┘
      ▲                                    ▲
      │                                    │
@@ -211,7 +222,7 @@ cSHAKE256 domain-separation padding:
               │               │               │
               │       ┌───────▼───────┐       │
   data_in ────┼──────►│ absorb_buffer │       │
-  [255:0]     │       │  1088-bit MUX │       │
+  [639:0]     │       │  1088-bit MUX │       │
               │       │ (prefix/data) │       │
               │       └───────┬───────┘       │
               │               │               │

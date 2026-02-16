@@ -3,7 +3,8 @@ module cshake256_core (
     input  logic  clk, rst, start,
 
     // Input
-    input logic  [255:0] data_in,
+    input logic  [639:0] data_in,
+    input logic          data_80byte, // 0: 32-byte input, 1: 80-byte input
 
     // S vlaue
     input  logic s_value, // 0: S = "ProofOfWorkHash", 1: S = "HeavyHash"
@@ -128,8 +129,14 @@ always_comb begin
               data_next_state = absorb_state_out;
         end
         ABSORB_INPUT: begin
-          absorb_buffer[255:0]    = data_in;
-          absorb_buffer[263:256]  = 8'h04;
+          absorb_buffer[639:0] = data_in;
+          if (data_80byte) begin
+              // 80-byte input: pad at byte 80
+              absorb_buffer[647:640]  = 8'h04;
+          end else begin
+              // 32-byte input: pad at byte 32 (upper bits are zero)
+              absorb_buffer[263:256]  = 8'h04;
+          end
           absorb_buffer[1087:1080] = 8'h80;
           absorb_start = 1'b1;
           if (absorb_done)

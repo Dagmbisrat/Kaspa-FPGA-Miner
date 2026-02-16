@@ -3,14 +3,15 @@
 Generate test vectors for cshake256_core.
 
 Core interface:
-  - data_in[255:0]  : 32-byte message
-  - s_value          : 0 = S="ProofOfWorkHash", 1 = S="HeavyHash"
-  - hash_out[255:0]  : 32-byte cSHAKE256 digest
+  - data_in[639:0]   : up to 80-byte message (640 bits)
+  - data_80byte       : 0 = 32-byte input, 1 = 80-byte input
+  - s_value           : 0 = S="ProofOfWorkHash", 1 = S="HeavyHash"
+  - hash_out[255:0]   : 32-byte cSHAKE256 digest
 
-Each test in the .mem file is 9 x 64-bit hex words:
-  Word 0   : control  (bit 0 = s_value)
-  Words 1-4: data_in  (4 lanes, little-endian)
-  Words 5-8: expected hash (4 lanes, little-endian)
+Each test in the .mem file is 15 x 64-bit hex words:
+  Word 0    : control  (bit 0 = s_value, bit 1 = data_80byte)
+  Words 1-10: data_in  (10 lanes, little-endian, 640 bits)
+  Words 11-14: expected hash (4 lanes, little-endian)
 
 Requires: pip install pycryptodome
 """
@@ -24,31 +25,41 @@ S_STRINGS = {
     1: b"HeavyHash",
 }
 
-# Test inputs: (s_value, data_in_bytes)
+DATA_LANES = 10  # 640 bits / 64 = 10 lanes
+HASH_LANES = 4   # 256 bits / 64 = 4 lanes
+
+# Test inputs: (s_value, data_80byte, data_in_bytes)
 TEST_CASES = [
-    # All zeros, ProofOfWorkHash
-    (0, bytes(32)),
-    # All zeros, HeavyHash
-    (1, bytes(32)),
-    # Incrementing bytes, ProofOfWorkHash
-    (0, bytes(range(32))),
-    # Incrementing bytes, HeavyHash
-    (1, bytes(range(32))),
-    # All 0xFF, ProofOfWorkHash
-    (0, bytes([0xFF] * 32)),
-    # All 0xFF, HeavyHash
-    (1, bytes([0xFF] * 32)),
-    # Single byte set, ProofOfWorkHash
-    (0, b"\x01" + bytes(31)),
-    # Random-ish pattern, HeavyHash
-    (1, bytes([i ^ 0xA5 for i in range(32)])),
+    # --- 32-byte inputs (HeavyHash) ---
+    # All zeros
+    (1, 0, bytes(32)),
+    # Incrementing bytes
+    (1, 0, bytes(range(32))),
+    # All 0xFF
+    (1, 0, bytes([0xFF] * 32)),
+    # Random-ish pattern
+    (1, 0, bytes([i ^ 0xA5 for i in range(32)])),
+
+    # --- 80-byte inputs (ProofOfWorkHash) ---
+    # All zeros
+    (0, 1, bytes(80)),
+    # Incrementing bytes
+    (0, 1, bytes(range(80))),
+    # All 0xFF
+    (0, 1, bytes([0xFF] * 80)),
+    # Single byte set
+    (0, 1, b"\x01" + bytes(79)),
+    # Random-ish pattern
+    (0, 1, bytes([i ^ 0xA5 for i in range(80)])),
+    # Another pattern
+    (0, 1, bytes([(i * 7 + 3) & 0xFF for i in range(80)])),
 ]
 
 
-def bytes_to_lanes(b: bytes) -> list[int]:
-    """Convert 32 bytes to 4 x 64-bit little-endian lanes."""
-    assert len(b) == 32
-    return list(struct.unpack("<4Q", b))
+def bytes_to_lanes(b: bytes, num_lanes: int) -> list[int]:
+    """Convert bytes to N x 64-bit little-endian lanes, zero-padded."""
+    padded = b.ljust(num_lanes * 8, b"\x00")
+    return list(struct.unpack(f"<{num_lanes}Q", padded))
 
 
 def compute_cshake256(s_value: int, data: bytes) -> bytes:
@@ -59,21 +70,23 @@ def compute_cshake256(s_value: int, data: bytes) -> bytes:
 
 def main():
     lines = []
-    for i, (s_val, data_in) in enumerate(TEST_CASES):
+    for i, (s_val, is_80byte, data_in) in enumerate(TEST_CASES):
         expected = compute_cshake256(s_val, data_in)
 
-        # Control word
-        lines.append(f"{s_val:016x}")
+        # Control word: bit 0 = s_value, bit 1 = data_80byte
+        control = s_val | (is_80byte << 1)
+        lines.append(f"{control:016x}")
 
-        # data_in lanes
-        for lane in bytes_to_lanes(data_in):
+        # data_in lanes (10 x 64-bit, zero-padded for 32-byte inputs)
+        for lane in bytes_to_lanes(data_in, DATA_LANES):
             lines.append(f"{lane:016x}")
 
         # expected hash lanes
-        for lane in bytes_to_lanes(expected):
+        for lane in bytes_to_lanes(expected, HASH_LANES):
             lines.append(f"{lane:016x}")
 
-        print(f"Test {i}: s_value={s_val} S={S_STRINGS[s_val].decode()!r}")
+        nbytes = 80 if is_80byte else 32
+        print(f"Test {i}: s_value={s_val} data_80byte={is_80byte} ({nbytes}B) S={S_STRINGS[s_val].decode()!r}")
         print(f"  data_in : {data_in.hex()}")
         print(f"  expected: {expected.hex()}")
 

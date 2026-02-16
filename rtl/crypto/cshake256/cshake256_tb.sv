@@ -2,25 +2,27 @@
 
 module cshake256_tb;
 
-parameter NUM_TESTS = 8;
-parameter WORDS_PER_TEST = 9;  // 1 control + 4 data_in + 4 expected_hash
+parameter NUM_TESTS = 10;
+parameter WORDS_PER_TEST = 15;  // 1 control + 10 data_in + 4 expected_hash
 
 logic        clk;
 logic        rst;
 logic        start;
-logic [255:0] data_in;
+logic [639:0] data_in;
+logic         data_80byte;
 logic         s_value;
 logic [255:0] hash_out;
 logic         done;
 
 cshake256_core uut (
-    .clk      (clk),
-    .rst      (rst),
-    .start    (start),
-    .data_in  (data_in),
-    .s_value  (s_value),
-    .hash_out (hash_out),
-    .done     (done)
+    .clk         (clk),
+    .rst         (rst),
+    .start       (start),
+    .data_in     (data_in),
+    .data_80byte (data_80byte),
+    .s_value     (s_value),
+    .hash_out    (hash_out),
+    .done        (done)
 );
 
 // Clock generation
@@ -43,6 +45,7 @@ initial begin
     rst = 1;
     start = 0;
     data_in = '0;
+    data_80byte = 0;
     s_value = 0;
     pass_count = 0;
     fail_count = 0;
@@ -54,21 +57,26 @@ initial begin
     for (t = 0; t < NUM_TESTS; t = t + 1) begin
         base = t * WORDS_PER_TEST;
 
-        // Word 0: control — bit 0 = s_value
-        s_value = vectors[base][0];
+        // Word 0: control — bit 0 = s_value, bit 1 = data_80byte
+        s_value     = vectors[base][0];
+        data_80byte = vectors[base][1];
 
-        // Words 1-4: data_in (4 x 64-bit lanes, little-endian)
-        data_in = {vectors[base + 4], vectors[base + 3],
-                   vectors[base + 2], vectors[base + 1]};
+        // Words 1-10: data_in (10 x 64-bit lanes, little-endian)
+        data_in = {vectors[base + 10], vectors[base + 9],
+                   vectors[base + 8],  vectors[base + 7],
+                   vectors[base + 6],  vectors[base + 5],
+                   vectors[base + 4],  vectors[base + 3],
+                   vectors[base + 2],  vectors[base + 1]};
 
-        // Words 5-8: expected hash (4 x 64-bit lanes, little-endian)
-        expected_hash = {vectors[base + 8], vectors[base + 7],
-                         vectors[base + 6], vectors[base + 5]};
+        // Words 11-14: expected hash (4 x 64-bit lanes, little-endian)
+        expected_hash = {vectors[base + 14], vectors[base + 13],
+                         vectors[base + 12], vectors[base + 11]};
 
         $display("--- Test %0d ---", t);
-        $display("  s_value : %0b", s_value);
-        $display("  data_in : %h", data_in);
-        $display("  expected: %h", expected_hash);
+        $display("  s_value    : %0b", s_value);
+        $display("  data_80byte: %0b", data_80byte);
+        $display("  data_in    : %h", data_in);
+        $display("  expected   : %h", expected_hash);
 
         // Pulse start
         @(posedge clk);
