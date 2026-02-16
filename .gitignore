@@ -16,3 +16,6 @@ obj_dir/
 
 # Zed files
 .Zed
+
+# Personal files
+todo.txt

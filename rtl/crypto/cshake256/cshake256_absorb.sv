@@ -62,7 +62,7 @@ always_comb begin
         end
 
         PERMUTE: begin
-            if (perm_done)
+            if (perm_done && perm_started)
                 next_state = DONE;
         end
 
@@ -92,40 +92,63 @@ always_comb begin
     case (current_state)
         ABSORB_XOR: begin
             // XOR input block into rate portion (first 1088 bits = 17 lanes)
-            // Lane mapping: state[y][x] where index = x + 5*y
-            // Rate: lanes 0-16 (1088 bits)
-            // Capacity: lanes 17-24 (512 bits)
-
-            for (int lane = 0; lane < 17; lane++) begin
-                int x = lane % 5;
-                int y = lane / 5;
-                state_next[y][x] = state[y][x] ^ input_block[lane*64 +: 64];
-            end
-
-            // Capacity lanes (17-24) unchanged
+            // Lane mapping: state[x][y] where lane index = x + 5*y
+            // (matches keccak_round convention: first dim = x, second = y)
+            // y=0: lanes 0-4
+            state_next[0][0] = state[0][0] ^ input_block[  0*64 +: 64];
+            state_next[1][0] = state[1][0] ^ input_block[  1*64 +: 64];
+            state_next[2][0] = state[2][0] ^ input_block[  2*64 +: 64];
+            state_next[3][0] = state[3][0] ^ input_block[  3*64 +: 64];
+            state_next[4][0] = state[4][0] ^ input_block[  4*64 +: 64];
+            // y=1: lanes 5-9
+            state_next[0][1] = state[0][1] ^ input_block[  5*64 +: 64];
+            state_next[1][1] = state[1][1] ^ input_block[  6*64 +: 64];
+            state_next[2][1] = state[2][1] ^ input_block[  7*64 +: 64];
+            state_next[3][1] = state[3][1] ^ input_block[  8*64 +: 64];
+            state_next[4][1] = state[4][1] ^ input_block[  9*64 +: 64];
+            // y=2: lanes 10-14
+            state_next[0][2] = state[0][2] ^ input_block[ 10*64 +: 64];
+            state_next[1][2] = state[1][2] ^ input_block[ 11*64 +: 64];
+            state_next[2][2] = state[2][2] ^ input_block[ 12*64 +: 64];
+            state_next[3][2] = state[3][2] ^ input_block[ 13*64 +: 64];
+            state_next[4][2] = state[4][2] ^ input_block[ 14*64 +: 64];
+            // y=3: lanes 15-16 (partial row, rate ends at lane 16)
+            state_next[0][3] = state[0][3] ^ input_block[ 15*64 +: 64];
+            state_next[1][3] = state[1][3] ^ input_block[ 16*64 +: 64];
         end
 
         PERMUTE: begin
-            if (perm_done) begin
+            if (perm_done && perm_started) begin
                 state_next = perm_state_out;
             end
         end
     endcase
 end
 
-    // Keccak permutation control
-    assign perm_start = (current_state == PERMUTE) && !perm_done;
+    // Keccak permutation control — one-cycle pulse to avoid
+    // re-loading state_in every cycle (keccak's start branch
+    // has priority over its round-advance branch).
+    logic perm_started;
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst)
+            perm_started <= 1'b0;
+        else if (current_state != PERMUTE)
+            perm_started <= 1'b0;
+        else
+            perm_started <= 1'b1;
+    end
+    assign perm_start = (current_state == PERMUTE) && !perm_started;
     assign perm_state_in = state;
 
     // Output assignments
     assign done = (current_state == DONE);
 
-    // Flatten state to 1600-bit output
+    // Flatten state to 1600-bit output (state[x][y], lane = x + 5*y)
     always_comb begin
-        for (int y = 0; y < 5; y++) begin
-            for (int x = 0; x < 5; x++) begin
+        for (int x = 0; x < 5; x++) begin
+            for (int y = 0; y < 5; y++) begin
                 int lane_idx = x + 5*y;
-                state_out[lane_idx*64 +: 64] = state[y][x];
+                state_out[lane_idx*64 +: 64] = state[x][y];
             end
         end
     end
