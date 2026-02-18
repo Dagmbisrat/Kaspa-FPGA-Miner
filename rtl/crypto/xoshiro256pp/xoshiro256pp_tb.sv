@@ -4,21 +4,14 @@ module xoshiro256pp_tb;
 
 parameter NUM_ITERS = 10;
 
-logic clk;
-logic rst;
 logic [63:0] s0, s1, s2, s3;
 logic [63:0] out, new_s0, new_s1, new_s2, new_s3;
 
 xoshiro256pp uut (
-    .clk(clk),
-    .rst(rst),
     .s0(s0), .s1(s1), .s2(s2), .s3(s3),
     .out(out),
     .new_s0(new_s0), .new_s1(new_s1), .new_s2(new_s2), .new_s3(new_s3)
 );
-
-// Clock generation
-always #5 clk = ~clk;
 
 // File-loaded vectors: row 0 = seed, rows 1..NUM_ITERS = expected
 // Each row: [4]=out [3]=s0 [2]=s1 [1]=s2 [0]=s3  (5 x 64-bit packed into 320-bit words)
@@ -41,19 +34,8 @@ initial begin
 
     $readmemh("expected_vectors.mem", vectors);
 
-    // Initialize
-    clk = 0;
-    rst = 1;
-    s0 = 64'h0;
-    s1 = 64'h0;
-    s2 = 64'h0;
-    s3 = 64'h0;
     pass_count = 0;
     fail_count = 0;
-
-    // Release reset
-    @(posedge clk);
-    #1 rst = 0;
 
     // Load seed from vectors[0]
     s0 = `VEC_S0(0);
@@ -63,8 +45,7 @@ initial begin
 
     // Run iterations, compare against expected
     for (i = 0; i < NUM_ITERS; i = i + 1) begin
-        @(posedge clk);
-        #1;
+        #10;
 
         if (out !== `VEC_OUT(i+1) ||
             new_s0 !== `VEC_S0(i+1) || new_s1 !== `VEC_S1(i+1) ||
@@ -81,7 +62,7 @@ initial begin
             pass_count = pass_count + 1;
         end
 
-        // Feed state back
+        // Feed next state back
         s0 = new_s0;
         s1 = new_s1;
         s2 = new_s2;
