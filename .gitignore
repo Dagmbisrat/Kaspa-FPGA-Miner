@@ -19,3 +19,6 @@ obj_dir/
 
 # Personal files
 todo.txt
+
+#debug output files
+result.out
