@@ -25,7 +25,7 @@ module matrix_cache (
           PrePowHash <= '0;
           for (int i = 0; i < 64; i++)
               for (int j = 0; j < 64; j++)
-                  matrix[i][j] = '0;  // blocking ok under reset (Verilator requirement)
+                  matrix[i][j] = '0;  // - blocking ok under reset (Verilator requirement)
       end else begin
           if (wr_matrix_en)
               for (int i = 0; i < 16; i++) begin

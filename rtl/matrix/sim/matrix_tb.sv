@@ -3,8 +3,8 @@
 module matrix_tb;
 
   // ── Parameters ──
-  parameter NUM_TESTS = 3;         // max test cases in vector file
-  parameter TIMEOUT   = 1000;      // max cycles per test before fail
+  parameter NUM_TESTS = 49;        // max test cases in vector file
+  parameter TIMEOUT   = 8000;      // max cycles per test (allows ~13 regen attempts)
 
   // ── DUT signals ──
   logic          clk;
@@ -19,8 +19,9 @@ module matrix_tb;
   logic [7:0]    n16th_value;
   logic [63:0]   wr_matrix_data;
   logic          rd_en;
+  logic [5:0]    rd_row;
+  logic [255:0]  rd_row_data;
   logic [255:0]  rd_PrePowHash;
-  logic [255:0]  rd_row_data;   // unused for now
 
   matrix_generator uut (
     .clk              (clk),
@@ -33,6 +34,8 @@ module matrix_tb;
     .n16th_value      (n16th_value),
     .wr_matrix_data   (wr_matrix_data),
     .rd_en            (rd_en),
+    .rd_row           (rd_row),
+    .rd_row_data      (rd_row_data),
     .rd_PrePowHash    (rd_PrePowHash)
   );
 
@@ -45,7 +48,7 @@ module matrix_tb;
     .wr_matrix_data   (wr_matrix_data),
     .wr_PrePowHash    (PrePowHash),
     .rd_en            (rd_en),
-    .rd_row           (6'h0),
+    .rd_row           (rd_row),
     .rd_row_data      (rd_row_data),
     .rd_PrePowHash    (rd_PrePowHash)
   );
@@ -62,6 +65,9 @@ module matrix_tb;
   integer pass_count, fail_count;
   integer cycle_count;
   integer base;
+  integer mismatch;
+  logic [3:0] expected_nibble;
+  logic [3:0] actual_nibble;
 
   initial begin
     $dumpfile("matrix_tb.vcd");
@@ -85,7 +91,7 @@ module matrix_tb;
     for (test_idx = 0; test_idx < NUM_TESTS; test_idx = test_idx + 1) begin
       base = test_idx * 65;
 
-      // Skip if seed is X/0 (fewer tests in file than NUM_TESTS)
+      // Skip if seed is X (fewer tests in file than NUM_TESTS)
       if (vectors[base] === 256'bx) begin
         $display("Test %0d: no vector data, skipping", test_idx);
         continue;
@@ -95,13 +101,12 @@ module matrix_tb;
       $display("─────────────────────────────────────────────────");
       $display("Test %0d: PrePowHash = %h", test_idx, PrePowHash);
 
-      // ── First run: cache miss → full generation ──
+      // ── First run: cache miss → full generation + rank check ──
       @(posedge clk);
       #1 start = 1;
       @(posedge clk);
       #1 start = 0;
 
-      // Wait for done
       cycle_count = 0;
       while (!done && cycle_count < TIMEOUT) begin
         @(posedge clk);
@@ -115,7 +120,27 @@ module matrix_tb;
       end
 
       $display("  Generation completed in %0d cycles", cycle_count);
-      $display("  PASS: generation done (matrix check skipped)");
+
+      // ── Verify matrix content against expected vectors ──
+      // Access cache internals directly via hierarchical reference.
+      // vectors[base+1..base+64]: row r packed as 256 bits, nibble c at [c*4 +: 4].
+      mismatch = 0;
+      for (int r = 0; r < 64; r++) begin
+        for (int c = 0; c < 64; c++) begin
+          expected_nibble = vectors[base + 1 + r][c*4 +: 4];
+          actual_nibble   = cache.matrix[r][c];
+          if (actual_nibble !== expected_nibble)
+            mismatch = mismatch + 1;
+        end
+      end
+
+      if (mismatch > 0) begin
+        $display("  FAIL: matrix content mismatch (%0d nibbles wrong)", mismatch);
+        fail_count = fail_count + 1;
+        continue;
+      end
+
+      $display("  PASS: matrix verified (%0d nibbles correct)", 64*64);
       pass_count = pass_count + 1;
 
       // ── Second run (same PrePowHash): cache hit → fast path ──
@@ -134,8 +159,8 @@ module matrix_tb;
         $display("  FAIL: cache-hit path timed out");
         fail_count = fail_count + 1;
       end else if (cycle_count > 5) begin
-        // Cache hit should complete in ~3-4 cycles (IDLE→IDLE_CHECK→DONE→done reg)
-        $display("  WARN: cache hit took %0d cycles (expected ~3-4)", cycle_count);
+        // Cache hit: IDLE→IDLE_CHECK→DONE = ~3 cycles
+        $display("  WARN: cache hit took %0d cycles (expected ≤5)", cycle_count);
       end else begin
         $display("  PASS: cache hit in %0d cycles", cycle_count);
         pass_count = pass_count + 1;
