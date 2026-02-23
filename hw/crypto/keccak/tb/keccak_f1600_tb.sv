@@ -32,10 +32,10 @@ integer pass_count, fail_count;
 logic mismatch;
 
 initial begin
-    $dumpfile("keccak_f1600_tb.vcd");
+    $dumpfile("sim/keccak_f1600_tb.vcd");
     $dumpvars(0, keccak_f1600_tb);
 
-    $readmemh("expected_vectors.mem", vectors);
+    $readmemh("sim/expected_vectors.mem", vectors);
 
     clk = 0;
     rst = 1;

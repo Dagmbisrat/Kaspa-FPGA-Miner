@@ -10,17 +10,20 @@ final full-rank matrix, including seeds that require multiple PRNG attempts.
 Vectors that fail to produce a full-rank matrix within 1000 attempts are skipped.
 """
 
-import struct
-import sys
+import hashlib
 import os
 import random
-import hashlib
+import struct
+import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../software/referance"))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(
+    0, os.path.join(SCRIPT_DIR, "../../../../software/referance")
+)
 from kheavyhash_ref import KHeavyhash
 
-
 # ── PRNG helpers (must match RTL exactly) ────────────────────────────────────
+
 
 def xoshiro256pp_init(seed_bytes):
     state = []
@@ -121,7 +124,7 @@ for i in range(20):
     seeds_raw.append(("sha256", digest))
 
 # Category 3: Pseudo-random seeds (fixed RNG seed for reproducibility)
-rng = random.Random(0xdeadbeef)
+rng = random.Random(0xDEADBEEF)
 for _ in range(20):
     seed = bytes(rng.randint(0, 255) for _ in range(32))
     seeds_raw.append(("random", seed))
@@ -130,7 +133,7 @@ for _ in range(20):
 seen = set()
 seeds = []
 for category, s in seeds_raw:
-    if s not in seen and s != bytes(32):   # skip all-zero (forbidden PRNG state)
+    if s not in seen and s != bytes(32):  # skip all-zero (forbidden PRNG state)
         seen.add(s)
         seeds.append((category, s))
 
@@ -138,7 +141,7 @@ for category, s in seeds_raw:
 
 ref = KHeavyhash()
 
-test_cases = []          # (seed, final_matrix, needed_regen)
+test_cases = []  # (seed, final_matrix, needed_regen)
 needs_regen_count = 0
 first_attempt_count = 0
 skipped_count = 0
@@ -150,7 +153,9 @@ for category, seed in seeds:
     try:
         final_matrix = ref._generate_matrix(seed)
     except RuntimeError:
-        print(f"  SKIP  [{category}] {seed.hex()}: could not reach full rank in 1000 attempts")
+        print(
+            f"  SKIP  [{category}] {seed.hex()}: could not reach full rank in 1000 attempts"
+        )
         skipped_count += 1
         continue
 
@@ -174,10 +179,13 @@ for category, seed in seeds:
 #           PrePowHash[63:0] = LE word 0, etc.
 #   64 lines: each row packed as 256-bit hex, element[0] in bits [3:0] (LSB).
 
-with open("expected_matrix.mem", "w") as f:
-    f.write(f"// {len(test_cases)} test case(s)  "
-            f"({first_attempt_count} first-attempt, {needs_regen_count} regen, "
-            f"{skipped_count} skipped)\n")
+out_path = os.path.join(SCRIPT_DIR, "expected_matrix.mem")
+with open(out_path, "w") as f:
+    f.write(
+        f"// {len(test_cases)} test case(s)  "
+        f"({first_attempt_count} first-attempt, {needs_regen_count} regen, "
+        f"{skipped_count} skipped)\n"
+    )
     for seed, matrix, tag in test_cases:
         f.write(f"// [{tag}] {seed.hex()}\n")
         f.write(f"{seed[::-1].hex()}\n")
@@ -189,12 +197,12 @@ with open("expected_matrix.mem", "w") as f:
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 total = len(test_cases)
-print(f"\n{'═'*52}")
+print(f"\n{'═' * 52}")
 print(f"  Total test cases : {total}")
 print(f"  Full rank first  : {first_attempt_count}")
 print(f"  Required regen   : {needs_regen_count}")
 print(f"  Skipped          : {skipped_count}")
-print(f"{'═'*52}")
-print(f"  Wrote {total} test case(s) to expected_matrix.mem")
+print(f"{'═' * 52}")
+print(f"  Wrote {total} test case(s) to {out_path}")
 print(f"  Update matrix_tb.sv:  parameter NUM_TESTS = {total};")
-print(f"{'═'*52}")
+print(f"{'═' * 52}")

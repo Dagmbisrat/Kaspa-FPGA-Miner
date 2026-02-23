@@ -29,10 +29,10 @@ integer pass_count;
 integer fail_count;
 
 initial begin
-    $dumpfile("xoshiro256pp_tb.vcd");
+    $dumpfile("sim/xoshiro256pp_tb.vcd");
     $dumpvars(0, xoshiro256pp_tb);
 
-    $readmemh("expected_vectors.mem", vectors);
+    $readmemh("sim/expected_vectors.mem", vectors);
 
     pass_count = 0;
     fail_count = 0;

@@ -36,10 +36,10 @@ integer pass_count, fail_count;
 logic [255:0] expected_hash;
 
 initial begin
-    $dumpfile("cshake256_tb.vcd");
+    $dumpfile("sim/cshake256_tb.vcd");
     $dumpvars(0, cshake256_tb);
 
-    $readmemh("expected_vectors.mem", vectors);
+    $readmemh("sim/expected_vectors.mem", vectors);
 
     clk = 0;
     rst = 1;

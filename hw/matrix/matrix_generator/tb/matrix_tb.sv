@@ -70,10 +70,10 @@ module matrix_tb;
   logic [3:0] actual_nibble;
 
   initial begin
-    $dumpfile("matrix_tb.vcd");
+    $dumpfile("sim/matrix_tb.vcd");
     $dumpvars(0, matrix_tb);
 
-    $readmemh("expected_matrix.mem", vectors);
+    $readmemh("sim/expected_matrix.mem", vectors);
 
     clk        = 0;
     rst        = 1;

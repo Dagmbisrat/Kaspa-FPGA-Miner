@@ -5,7 +5,9 @@ import sys
 
 sys.path.insert(
     0,
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "software", "referance"),
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "..", "software", "referance"
+    ),
 )
 
 from kheavyhash_ref import KHeavyhash

@@ -108,7 +108,7 @@ module matrix_rank_tb;
   logic   result;
 
   initial begin
-    $dumpfile("matrix_rank_tb.vcd");
+    $dumpfile("sim/matrix_rank_tb.vcd");
     $dumpvars(0, matrix_rank_tb);
 
     // ── Build test matrices ──────────────────────────────────────────────────

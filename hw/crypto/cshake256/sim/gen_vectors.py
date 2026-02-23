@@ -16,9 +16,12 @@ Each test in the .mem file is 15 x 64-bit hex words:
 Requires: pip install pycryptodome
 """
 
+import os
 import struct
 
 from Crypto.Hash import cSHAKE256
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 S_STRINGS = {
     0: b"ProofOfWorkHash",
@@ -90,11 +93,12 @@ def main():
         print(f"  data_in : {data_in.hex()}")
         print(f"  expected: {expected.hex()}")
 
-    with open("expected_vectors.mem", "w") as f:
+    out_path = os.path.join(SCRIPT_DIR, "expected_vectors.mem")
+    with open(out_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
     print(
-        f"\nWrote {len(TEST_CASES)} tests ({len(lines)} words) to expected_vectors.mem"
+        f"\nWrote {len(TEST_CASES)} tests ({len(lines)} words) to {out_path}"
     )
 
 
