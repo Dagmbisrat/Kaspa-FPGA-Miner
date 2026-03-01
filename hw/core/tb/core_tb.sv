@@ -111,7 +111,10 @@ initial begin
     $display(" Results: %0d PASS, %0d FAIL", pass_count, fail_count);
     $display("=============================");
 
-    $finish;
+    if (fail_count > 0)
+        $fatal(1, "FAIL: %0d test(s) failed", fail_count);
+    else
+        $finish;
 end
 
 endmodule

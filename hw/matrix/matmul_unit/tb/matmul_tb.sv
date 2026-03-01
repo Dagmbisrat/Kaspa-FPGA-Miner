@@ -151,11 +151,11 @@ module matmul_tb;
     $display(" Results: %0d PASS, %0d FAIL", pass_count, fail_count);
     $display("═════════════════════════════════════════════════");
     if (fail_count > 0)
-      $display(" *** FAILURES DETECTED ***");
-    else
+      $fatal(1, "FAIL: %0d test(s) failed", fail_count);
+    else begin
       $display(" All tests passed!");
-
-    $finish;
+      $finish;
+    end
   end
 
 endmodule
