@@ -24,8 +24,8 @@ logic [639:0] header_reg;
 typedef enum logic [2:0] {
     IDLE    = 3'b000,
     STAGE1  = 3'b001, // Matirx Gen & Cshake 1 Gen
-    STAGE2  = 3'b010, // Matmul (XOR built in)
-    STAGE3  = 3'b011, // Final cSHAKE256 2 Gen
+    STAGE2  = 3'b010, // Matmul
+    STAGE3  = 3'b011, // Final cSHAKE256 2 Gen (XOR built in)
     DONE    = 3'b100
 } state_t;
 state_t state, next_state;
@@ -119,7 +119,7 @@ logic         cshake_s_value;      // Driven by diffrent stages
 
 // Outputs from IP
 logic [255:0] cshake_hash_out;
-logic [255:0] cshake_hash_out_reg;
+logic [255:0] pow_hash_reg;
 
 
 // Cshake IP instance
@@ -154,7 +154,7 @@ matmul_unit Matrix_Mul (
     .rst(rst),
 
     .start(matrix_mul_start),
-    .vector_in(cshake_hash_out_reg),
+    .vector_in(pow_hash_reg),
     .done(matrix_mul_done),
 
     // Cache read
@@ -186,10 +186,14 @@ always_comb begin
           end
         end
         STAGE3:  begin
-
+          if (cshake_done) begin
+            next_state = DONE;
+          end
         end
         DONE:    begin
-
+          if (done) begin
+            next_state = IDLE;
+          end
         end
     endcase
 end
@@ -217,6 +221,10 @@ always_comb begin
 
 
   // Default Hash signals
+
+
+  // Defult
+  done = 1'b0;
   case (state)
     IDLE:    begin
       // No need
@@ -233,10 +241,13 @@ always_comb begin
       // Matrix Mul set at sequential logic
     end
     STAGE3:  begin
-
+      // Cshake
+      cshake_data_80byte = 1'b0;
+      cshake_s_value = 1'b1;
+      cshake_data_in = {384'b0, (matrix_mul_product_out_reg ^ pow_hash_reg)}; // Xor with pow_hash
     end
-    DONE:    begin
-
+    DONE:  begin
+      done = 1'b1;
     end
   endcase
 end
@@ -249,7 +260,8 @@ assign wr_matrix_data = matrix_gen_wr_matrix_data;
 assign wr_PrePowHash = header_reg[255:0];
 
 // Cache Read assigns
-assign rd_en  = (state == STAGE2) ? matrix_mul_rd_en  : matrix_gen_rd_en;
+assign rd_en  = (state == STAGE2) ? matrix_mul_rd_en  :
+                (state == STAGE1) ? matrix_gen_rd_en  : 1'b0;
 assign rd_row = (state == STAGE2) ? matrix_mul_rd_row : matrix_gen_rd_row;
 
 
@@ -265,18 +277,21 @@ always_ff @(posedge clk or posedge rst) begin
 
     matrix_gen_complete_reg <= 1'b0;
     cshake_complete_reg <= 1'b0;
-    cshake_hash_out_reg <= 256'b0;
+    pow_hash_reg <= 256'b0;
 
     // Stage 2: Reset values
     matrix_mul_start <= 1'b0;
     matrix_mul_product_out_reg <= 256'b0;
+
+    // Stage 3: Reset values
+    hash_out <= 256'b0;
   end else begin
 
     case (state)
       IDLE: begin
         matrix_gen_complete_reg <= 1'b0;
         cshake_complete_reg <= 1'b0;
-        cshake_hash_out_reg <= 256'b0;
+        pow_hash_reg <= 256'b0;
         matrix_mul_product_out_reg <= 256'b0;
 
         // Set for next stage (STAGE1)
@@ -306,7 +321,7 @@ always_ff @(posedge clk or posedge rst) begin
         // Cshake IP
         if (cshake_done) begin
           cshake_complete_reg <= 1'b1;
-          cshake_hash_out_reg <= cshake_hash_out;
+          pow_hash_reg <= cshake_hash_out;
         end
 
         // Set for next stage (STAGE2)
@@ -329,7 +344,20 @@ always_ff @(posedge clk or posedge rst) begin
 
         // Set for next stage (STAGE3)
         if (next_state == STAGE3) begin
-          // Set Cshake agin...
+          cshake_start <= 1'b1;
+        end
+      end
+      STAGE3: begin
+
+        // Clear start
+        if (cshake_start == 1'b1) begin
+          cshake_start <= 1'b0;
+        end
+
+        // Cshake IP
+        if (cshake_done) begin
+          // cshake_complete_reg <= 1'b1;
+          hash_out <= cshake_hash_out;
         end
       end
       default: begin
