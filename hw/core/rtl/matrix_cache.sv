@@ -10,7 +10,7 @@ module matrix_cache (
     input  logic [255:0]  wr_PrePowHash,
 
     // Read interface
-    input logic           rd_en,
+    input  logic          rd_en,
     input  logic [5:0]    rd_row,
     output logic [255:0]  rd_row_data,
     output logic [255:0]  rd_PrePowHash
