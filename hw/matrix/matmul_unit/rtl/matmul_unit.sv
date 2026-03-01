@@ -30,11 +30,14 @@ module matmul_unit (
     assign rd_row = row_ptr[5:0];
 
     // Dot product of cached row with vector; max 64*(15*15)=14400 fits in 14 bits
+    // j^1 swaps nibbles within each byte to match Python's high-nibble-first convention:
+    //   Python vector[2k]   = high nibble of hash byte k = vector_in[(2k+1)*4 +: 4]
+    //   Python vector[2k+1] = low  nibble of hash byte k = vector_in[(2k  )*4 +: 4]
     logic [13:0] dot;
     always_comb begin
         dot = 14'd0;
         for (int j = 0; j < 64; j++)
-            dot = dot + 14'(rd_row_data[j*4 +: 4] * vector_in[j*4 +: 4]);
+            dot = dot + 14'(rd_row_data[j*4 +: 4] * vector_in[(j^1)*4 +: 4]);
     end
 
     always_ff @(posedge clk or posedge rst) begin
@@ -55,9 +58,12 @@ module matmul_unit (
                 end
 
                 RUN: begin
-                    // rd_row_data holds row (row_ptr-1), fetched last cycle
+                    // rd_row_data holds row (row_ptr-1), fetched last cycle.
+                    // (row_ptr-1)^1 swaps nibble position within each byte so that
+                    // row 2k result lands in the high nibble of output byte k,
+                    // matching Python's _xor_with_hash recombination convention.
                     if (row_ptr > 7'd0)
-                        product_out[(row_ptr - 7'd1) * 4 +: 4] <= dot[13:10];
+                        product_out[((row_ptr - 7'd1) ^ 7'd1) * 4 +: 4] <= dot[13:10];
 
                     if (row_ptr == 7'd64)
                         state <= DONE;

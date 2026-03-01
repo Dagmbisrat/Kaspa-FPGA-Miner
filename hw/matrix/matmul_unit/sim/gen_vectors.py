@@ -3,12 +3,16 @@ Generate matmul_unit test vectors.
 
 Output file: expected_vectors.mem
 Format per test case (66 lines):
-  line  0      : vector_in          (256-bit, 64 nibbles packed LSB-first)
-  lines 1-64   : matrix rows 0..63  (256-bit, 64 nibbles packed LSB-first)
-  line  65     : expected product    (256-bit, 64 nibbles packed LSB-first)
+  line  0      : vector_in          (256-bit, nibble-swapped packing)
+  lines 1-64   : matrix rows 0..63  (256-bit, LSB-first packing)
+  line  65     : expected product    (256-bit, nibble-swapped packing)
 
-Packing convention (matches matrix_cache rd_row_data):
-  element j lives at bits [j*4 +: 4]  →  element 63 is the leftmost hex digit.
+Packing conventions:
+  Matrix rows  — element j at bits [j*4 +: 4]  (LSB-first, matches matrix_cache)
+  Vector / product — element j at bits [(j^1)*4 +: 4]  (nibble-swapped)
+    j^1 swaps nibbles within each byte so that element 2k (the high nibble of
+    byte k in Python convention) sits at bits [8k+7:8k+4], matching how the
+    hardware reads vector_in and writes product_out after the j^1 fix.
 
 Reference: software/referance/kheavyhash_ref.py _matrix_vector_multiply()
 """
@@ -29,10 +33,22 @@ from kheavyhash_ref import KHeavyhash
 
 
 def pack256(nibbles: list[int]) -> int:
-    """Pack 64 nibbles into a 256-bit integer, element j at bits [j*4 +: 4]."""
+    """Pack 64 nibbles, element j at bits [j*4 +: 4]. Used for matrix rows."""
     val = 0
     for j, n in enumerate(nibbles):
         val |= (n & 0xF) << (j * 4)
+    return val
+
+
+def pack256_swapped(nibbles: list[int]) -> int:
+    """Pack 64 nibbles, element j at bits [(j^1)*4 +: 4].
+
+    Used for vector_in and product_out: j^1 swaps nibbles within each byte so
+    that the high nibble of byte k (Python element 2k) sits at bits [8k+7:8k+4].
+    """
+    val = 0
+    for j, n in enumerate(nibbles):
+        val |= (n & 0xF) << ((j ^ 1) * 4)
     return val
 
 
@@ -90,10 +106,10 @@ def generate(n_tests: int = 20, out_file: str = "expected_vectors.mem") -> None:
 
             # Write test case (66 lines)
             f.write(f"// test {t}  pre_pow_hash={pre_pow_hash.hex()}\n")
-            f.write(fmt256(pack256(vector)) + "\n")  # line 0: vector_in
-            for row in matrix:  # lines 1-64: matrix
+            f.write(fmt256(pack256_swapped(vector)) + "\n")  # line 0:    vector_in  (swapped)
+            for row in matrix:                               # lines 1-64: matrix rows (LSB-first)
                 f.write(fmt256(pack256(row)) + "\n")
-            f.write(fmt256(pack256(product)) + "\n")  # line 65: expected
+            f.write(fmt256(pack256_swapped(product)) + "\n") # line 65:   product    (swapped)
 
             print(
                 f"test {t:3d}: vector={fmt256(pack256(vector))[:16]}..."
