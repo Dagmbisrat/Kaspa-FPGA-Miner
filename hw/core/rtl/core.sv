@@ -16,12 +16,10 @@ module core (
 );
 
 // 80-byte header: pre_pow_hash | timestamp | 32x0 | nonce
-logic [639:0] header;
-assign header = {nonce, 256'b0, timestamp, pre_pow_hash};
+logic [639:0] header_reg;
 
 // ---------------------------------------------------------------------------
 //                      Fsm signals and definitions
-
 // States
 typedef enum logic [2:0] {
     IDLE    = 3'b000,
@@ -31,7 +29,6 @@ typedef enum logic [2:0] {
     DONE    = 3'b100
 } state_t;
 state_t state, next_state;
-
 // ---------------------------------------------------------------------------
 
 
@@ -88,11 +85,11 @@ logic           matrix_gen_rd_en;
 logic [5:0]     matrix_gen_rd_row;
 
 // Matrix Gen IP instance
-matrix_gen MatrixGen (
+matrix_generator MatrixGen (
     .clk(clk),
     .rst(rst),
     .start(matrix_gen_start),
-    .PrePowHash(header[255:0]),
+    .PrePowHash(header_reg[255:0]),
     .done(matrix_gen_done), // Output
 
     // Cache write
@@ -113,6 +110,7 @@ matrix_gen MatrixGen (
 //                    Cshake IP signals and definitions
 logic         cshake_start;
 logic         cshake_done;
+logic         cshake_complete_reg;
 
 // Inputs to IP
 logic [639:0] cshake_data_in;      // Driven by diffrent stages
@@ -121,13 +119,11 @@ logic         cshake_s_value;      // Driven by diffrent stages
 
 // Outputs from IP
 logic [255:0] cshake_hash_out;
-
-// Output Register
 logic [255:0] cshake_hash_out_reg;
-logic cshake_complete_reg;
+
 
 // Cshake IP instance
-cshake Cshake256 (
+cshake256_core Cshake256 (
     .clk(clk),
     .rst(rst),
     .start(cshake_start),
@@ -136,6 +132,37 @@ cshake Cshake256 (
     .s_value(cshake_s_value),
     .hash_out(cshake_hash_out),
     .done(cshake_done)
+);
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+//                    Matrix Mul IP signals and definitions
+logic         matrix_mul_start;
+logic         matrix_mul_done;
+
+// Cache read
+logic           matrix_mul_rd_en;
+logic [5:0]     matrix_mul_rd_row;
+
+
+// Output from IP
+logic [255:0] matrix_mul_product_out;
+logic [255:0] matrix_mul_product_out_reg; // Reg should only hold the finished product
+
+matmul_unit Matrix_Mul (
+    .clk(clk),
+    .rst(rst),
+
+    .start(matrix_mul_start),
+    .vector_in(cshake_hash_out_reg),
+    .done(matrix_mul_done),
+
+    // Cache read
+    .rd_en(matrix_mul_rd_en),
+    .rd_row(matrix_mul_rd_row),
+    .rd_row_data(rd_row_data), // Taken directly from Cache
+
+    .product_out(matrix_mul_product_out)
 );
 // ---------------------------------------------------------------------------
 
@@ -154,7 +181,9 @@ always_comb begin
           end
         end
         STAGE2:  begin
-
+          if (matrix_mul_done) begin
+            next_state = STAGE3;
+          end
         end
         STAGE3:  begin
 
@@ -186,6 +215,7 @@ always_comb begin
 
   // Default Matrix Mul signals
 
+
   // Default Hash signals
   case (state)
     IDLE:    begin
@@ -197,10 +227,10 @@ always_comb begin
       // Cshake
       cshake_data_80byte = 1'b1;
       cshake_s_value = 1'b0;
-      cshake_data_in = header;
+      cshake_data_in = header_reg;
     end
     STAGE2:  begin
-
+      // Matrix Mul set at sequential logic
     end
     STAGE3:  begin
 
@@ -216,16 +246,19 @@ assign wr_matrix_en = matrix_gen_wr_matrix_en;
 assign wr_PrePowHash_en = matrix_gen_wr_PrePowHash_en;
 assign n16th_value = matrix_gen_n16th_value;
 assign wr_matrix_data = matrix_gen_wr_matrix_data;
-assign wr_PrePowHash = header[255:0];
+assign wr_PrePowHash = header_reg[255:0];
 
 // Cache Read assigns
-assign rd_en = matrix_gen_rd_en;    // Will continue to add other ips which will aslo controle
-assign rd_row = matrix_gen_rd_row; //  Will continue to add other ips which will aslo controle
+assign rd_en  = (state == STAGE2) ? matrix_mul_rd_en  : matrix_gen_rd_en;
+assign rd_row = (state == STAGE2) ? matrix_mul_rd_row : matrix_gen_rd_row;
 
 
 // Sequential logic for Core spesifc register's
 always_ff @(posedge clk or posedge rst) begin
   if (rst) begin
+    // Core Reset values
+    header_reg <= 640'b0;
+
     // Stage 1: Reset values
     matrix_gen_start <= 1'b0;
     cshake_start     <= 1'b0;
@@ -233,6 +266,10 @@ always_ff @(posedge clk or posedge rst) begin
     matrix_gen_complete_reg <= 1'b0;
     cshake_complete_reg <= 1'b0;
     cshake_hash_out_reg <= 256'b0;
+
+    // Stage 2: Reset values
+    matrix_mul_start <= 1'b0;
+    matrix_mul_product_out_reg <= 256'b0;
   end else begin
 
     case (state)
@@ -240,18 +277,27 @@ always_ff @(posedge clk or posedge rst) begin
         matrix_gen_complete_reg <= 1'b0;
         cshake_complete_reg <= 1'b0;
         cshake_hash_out_reg <= 256'b0;
+        matrix_mul_product_out_reg <= 256'b0;
 
+        // Set for next stage (STAGE1)
         if (next_state == STAGE1) begin
           matrix_gen_start <= 1'b1;
           cshake_start <= 1'b1;
         end
+
+        if (start) begin
+          header_reg <= {nonce, 256'b0, timestamp, pre_pow_hash};
+        end
       end
+      STAGE1: begin
 
-      default: begin
-
-        // Stage 1:
-        matrix_gen_start <= 1'b0;
-        cshake_start     <= 1'b0;
+        // Clear start
+        if (matrix_gen_start == 1'b1) begin
+          matrix_gen_start <= 1'b0;
+        end
+        if (cshake_start == 1'b1) begin
+          cshake_start <= 1'b0;
+        end
 
         // Matrix Gen IP
         if (matrix_gen_done) begin
@@ -262,6 +308,38 @@ always_ff @(posedge clk or posedge rst) begin
           cshake_complete_reg <= 1'b1;
           cshake_hash_out_reg <= cshake_hash_out;
         end
+
+        // Set for next stage (STAGE2)
+        if (next_state == STAGE2) begin
+          matrix_mul_start <= 1'b1;
+        end
+      end
+
+      STAGE2: begin
+
+        // Clear start
+        if (matrix_mul_start == 1'b1) begin
+          matrix_mul_start <= 1'b0;
+        end
+
+        // Matrix Mul
+        if (matrix_mul_done) begin
+          matrix_mul_product_out_reg <= matrix_mul_product_out;
+        end
+
+        // Set for next stage (STAGE3)
+        if (next_state == STAGE3) begin
+          // Set Cshake agin...
+        end
+      end
+      default: begin
+
+        // Stage 1:
+        matrix_gen_start <= 1'b0;
+        cshake_start     <= 1'b0;
+
+        // Stage 2:
+        matrix_mul_start <= 1'b0;
 
       end
     endcase
