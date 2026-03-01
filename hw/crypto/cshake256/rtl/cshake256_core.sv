@@ -144,7 +144,6 @@ always_comb begin
         end
     endcase
 end
-assign done = (fsm_current_state == DONE);
 
 // State sequential logic for setting the next on clk
 always_ff @(posedge clk or posedge rst) begin
@@ -155,12 +154,17 @@ always_ff @(posedge clk or posedge rst) begin
     end
 end
 
-// Capture hash from registered data_state during DONE
-// (avoids combinational timing issues with data_next_state)
+// hash_out and done are registered together in one block.
+// Both update at the clock edge of DONE, so they are valid
+// simultaneously in the following cycle (when FSM is back in IDLE).
 always_ff @(posedge clk or posedge rst) begin
-    if (rst)
+    if (rst) begin
         hash_out <= 256'b0;
-    else if (fsm_current_state == DONE)
-        hash_out <= data_state[255:0];
+        done     <= 1'b0;
+    end else begin
+        done <= (fsm_current_state == DONE);
+        if (fsm_current_state == DONE)
+            hash_out <= data_state[255:0];
+    end
 end
 endmodule
