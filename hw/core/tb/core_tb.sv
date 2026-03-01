@@ -2,7 +2,7 @@
 
 module core_tb;
 
-parameter NUM_TESTS      = 7;
+parameter NUM_TESTS      = 100;
 parameter WORDS_PER_TEST = 10;  // 4 pre_pow_hash + 1 timestamp + 1 nonce + 4 hash_out
 
 logic         clk;
