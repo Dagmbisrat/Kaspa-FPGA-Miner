@@ -10,16 +10,16 @@
 
 ## Port List
 
-| Port           | Dir | Width | Description                                      |
-|:-------------- |:---:|:-----:|:------------------------------------------------ |
-| `clk`          | in  | 1     | Clock                                            |
-| `rst`          | in  | 1     | Async reset                                      |
-| `start`        | in  | 1     | Begin hashing (held for one cycle)               |
-| `pre_pow_hash` | in  | 256   | Block header hash — seeds the matrix             |
-| `timestamp`    | in  | 64    | UNIX timestamp (little-endian uint64)            |
-| `nonce`        | in  | 64    | Mining nonce (little-endian uint64)              |
-| `hash_out`     | out | 256   | Final 32-byte kHeavyHash result                  |
-| `done`         | out | 1     | High for one cycle when `hash_out` is valid      |
+| Port           | Dir | Width | Description                                 |
+|:-------------- |:---:|:-----:|:------------------------------------------- |
+| `clk`          | in  | 1     | Clock                                       |
+| `rst`          | in  | 1     | Async reset                                 |
+| `start`        | in  | 1     | Begin hashing (held for one cycle)          |
+| `pre_pow_hash` | in  | 256   | Block header hash — seeds the matrix        |
+| `timestamp`    | in  | 64    | UNIX timestamp (little-endian uint64)       |
+| `nonce`        | in  | 64    | Mining nonce (little-endian uint64)         |
+| `hash_out`     | out | 256   | Final 32-byte kHeavyHash result             |
+| `done`         | out | 1     | High for one cycle when `hash_out` is valid |
 
 ---
 
@@ -30,11 +30,11 @@
                   │
                   ▼
        ┌──────────────────┐
-       │       IDLE       │◄────────────────────────────────────────┐
-       │   latch header   │                                         │
-       └────────┬─────────┘                                         │ done = 1
-                │                                                   │
-                ▼                                         ┌─────────┴────────┐
+       │       IDLE       │◄───────────────────────────────────────┐
+       │   latch header   │                                        │
+       └────────┬─────────┘                                        │ done = 1
+                │                                                  │
+                ▼                                        ┌─────────┴────────┐
 ┌───────────────────────────────────────────────┐        │       DONE       │
 │  STAGE 1                                      │        │    hash_out      │
 │                                               │        │    valid         │
@@ -46,11 +46,11 @@
 │  │                    │ │  80-byte header   │ │                  │
 │  │       │ wr         │ │                   │ │                  │
 │  │       ▼            │ │  pow_hash latched │ │                  │
-│  │  ┌──────────────┐  │ │  on done ─────►  │ │                  │
+│  │  ┌──────────────┐  │ │  on done ─────►   │ │                  │
 │  │  │ matrix_cache │  │ │   pow_hash_reg    │ │                  │
 │  │  └──────────────┘  │ └───────────────────┘ │                  │
 │  └────────────────────┘                       │                  │
-│   matrix_gen_complete_reg && cshake_complete_reg               │
+│matrix_gen_complete_reg && cshake_complete_reg │                  │
 └───────────────────────┬───────────────────────┘                  │
                         │                                          │
                         ▼                                          │
@@ -89,13 +89,13 @@
 
 ## Pipeline Stages
 
-| State    | Work                                               | Advances When                                         |
-|:-------- |:-------------------------------------------------- |:----------------------------------------------------- |
-| `IDLE`   | Latch header; arm starts for STAGE1                | `start = 1`                                          |
+| State    | Work                                                                                | Advances When                                                |
+|:-------- |:----------------------------------------------------------------------------------- |:------------------------------------------------------------ |
+| `IDLE`   | Latch header; arm starts for STAGE1                                                 | `start = 1`                                                  |
 | `STAGE1` | MatrixGen (from `pre_pow_hash`) \|\| cSHAKE256("ProofOfWorkHash") on 80-byte header | Both `matrix_gen_complete_reg` and `cshake_complete_reg` set |
-| `STAGE2` | matmul: cached matrix × vector (64 nibbles from `pow_hash_reg`) | `matrix_mul_done`                             |
-| `STAGE3` | cSHAKE256("HeavyHash") on `product XOR pow_hash`  | `cshake_done`                                        |
-| `DONE`   | Assert `done` for one cycle                        | Immediately (returns to IDLE)                        |
+| `STAGE2` | matmul: cached matrix × vector (64 nibbles from `pow_hash_reg`)                     | `matrix_mul_done`                                            |
+| `STAGE3` | cSHAKE256("HeavyHash") on `product XOR pow_hash`                                    | `cshake_done`                                                |
+| `DONE`   | Assert `done` for one cycle                                                         | Immediately (returns to IDLE)                                |
 
 ---
 

@@ -1,8 +1,26 @@
 # KasMiner — Kaspa FPGA Miner (KHeavyHash)
 
-An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, targeting the **Xilinx XC7K325T** (Kintex-7) FPGA.
+An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, targeting Xilinx Kintex-7 FPGAs — starting on the **XC7K160T** for development and scaling to the **XC7K325T** for full throughput.
 
-> ⚠️ **Status:** Work in progress — single core verified in simulation, multi-core and top-level integration pending.
+> ⚠️ **Status:** Work in progress — single core verified in simulation, moving toward throughput-optimised multi-core architecture and host interface integration.
+
+---
+
+## Design Philosophy
+
+This project is built as a **throughput-first FPGA accelerator**, not just a miner.
+
+Primary objective:
+> Maximise hashes per second per watt on Kintex-7 through deep pipelining and parallel core replication — validated on the XC7K160T, then scaled to the XC7K325T.
+
+Development order:
+1. Optimise **one core** for maximum Fmax and clean timing
+2. Measure resource usage per core
+3. Replicate cores for parallel throughput
+4. Integrate a high-performance host interface (PCIe preferred)
+5. Close timing and optimise routing
+
+Compute first. Interface later.
 
 ---
 
@@ -29,13 +47,42 @@ IDLE → STAGE1 (MatrixGen ∥ cSHAKE1) → STAGE2 (Matmul) → STAGE3 (cSHAKE2)
 
 STAGE1 runs matrix generation and the first cSHAKE hash in parallel. The matrix is cached per `PrePowHash` and reused across all nonce attempts for the same block, so only STAGE2 and STAGE3 need to repeat per nonce once the cache is warm.
 
-### Multi-Core (Planned)
+### Core Optimisation (Next)
 
-The final design will instantiate multiple `core` units in parallel, each assigned a non-overlapping nonce range. A top-level controller will distribute work and collect results.
+The current core is functional but not yet pipelined for maximum Fmax. Planned work:
 
-### Pipelining (Planned)
+- Pipeline Keccak-f[1600] rounds
+- Pipeline the matmul accumulator
+- Register stage boundaries aggressively to remove long combinational paths
+- Target: **180–220 MHz** on XC7K160T (baseline), then XC7K325T
 
-Once multi-core is working, the critical path will be profiled and the design pipelined — starting with the Keccak-f[1600] round and the matmul accumulator — to push clock frequency and maximise hashes per second on the XC7K325T.
+At full pipeline depth, throughput per core approaches:
+
+```
+Throughput_per_core ≈ Fmax   (e.g. 200 MHz → ~200 MH/s per core)
+```
+
+### Multi-Core Scaling (Planned)
+
+After single-core optimisation, multiple cores will be replicated via generate loops, each assigned a non-overlapping nonce range. A lightweight result FIFO collects valid nonce outputs. Expected scaling:
+
+```
+Total_Throughput = Fmax × Core_Count
+```
+
+Target range on XC7K160T: **~1–2 GH/s** (resource-constrained). Scaling to **2–4 GH/s** on XC7K325T once validated.
+
+### Host Interface (Planned)
+
+Primary target is a **PCIe accelerator** architecture:
+
+```
+PCIe → AXI Bridge → Work Distributor → [kHeavyHash Core × N] → Result FIFO → PCIe Return
+```
+
+Goals: memory-mapped control registers, nonce base + range configuration, interrupt or polling-based result reporting, minimal host overhead.
+
+An Ethernet-based interface may be used for early development testing if needed, but PCIe is the intended production interface.
 
 ---
 
@@ -57,7 +104,7 @@ hw/
     └── xoshiro256pp/   # Combinational xoshiro256++ PRNG
 
 software/
-└── referance/          # Python reference implementation (kheavyhash_ref.py)
+└── reference/          # Python reference implementation (kheavyhash_ref.py)
 
 docs/                   # Design documentation per module
 ```
@@ -79,23 +126,51 @@ Run from any module directory under `hw/` (e.g. `hw/core/`, `hw/crypto/cshake256
 
 ## Roadmap
 
+Progress and planned work — updated as phases complete.
+
+### Phase 1 — Single Core *(current)*
 - [x] Keccak-f[1600] RTL + verification
 - [x] cSHAKE256 core + verification
 - [x] xoshiro256++ PRNG
 - [x] Matrix generator (PRNG + rank check)
 - [x] Matrix-vector multiply unit
 - [x] Single `core` (full kHeavyHash pipeline) + verification
-- [ ] Multi-core instantiation with nonce distribution
-- [ ] Top-level with host interface
-- [ ] Timing closure and pipeline optimisation on XC7K325T
-- [ ] Synthesis and place-and-route on target device
+- [ ] Pipeline optimisation (Keccak rounds, matmul accumulator)
+- [ ] Achieve ≥180 MHz timing on XC7K160T
+- [ ] Measure LUT / DSP / BRAM usage per core
+- [ ] Confirm fit within XC7K160T resources
+
+### Phase 2 — Multi-Core (XC7K160T)
+- [ ] 4-core stable build on XC7K160T
+- [ ] Determine routing ceiling on XC7K160T
+- [ ] Measure GH/s scaling vs core count
+
+### Phase 2b — Scale to XC7K325T
+- [ ] Port and re-close timing on XC7K325T
+- [ ] 8-core stable build on XC7K325T
+- [ ] Confirm GH/s improvement vs 160T
+
+### Phase 3 — Host Interface
+- [ ] PCIe IP integration
+- [ ] AXI register map (work distribution + result reporting)
+- [ ] Host driver / software interface
+- [ ] End-to-end hashing from PC
+
+### Phase 4 — Optimisation
+- [ ] Fmax improvement pass
+- [ ] Power-per-hash reduction
+- [ ] Placement constraints and floorplanning
+- [ ] Long-duration stability testing
 
 ---
 
 ## Goals
 
 - Correct, fully verified KHeavyHash implementation in RTL
-- Maximise hashes/sec on the XC7K325T through parallelism and pipelining
+- Validated on XC7K160T, scaled to XC7K325T for full throughput
+- Scalable multi-core FPGA accelerator targeting ~1–2 GH/s (160T) → 2–4 GH/s (325T)
+- PCIe-connected high-throughput compute engine
+- Maximise hashes/sec per watt through pipelining and parallelism
 - Clean, modular design with full documentation (education-focused)
 - Strong open-source FPGA portfolio project
 
