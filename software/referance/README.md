@@ -26,7 +26,7 @@ pre_pow_hash + timestamp + nonce
   matrix × vector(pow_hash)              │
         │                                │
         ▼                                │
-      XOR ◄────────────────────────────┘
+      XOR ◄──────────────────────────────┘
         │
         ▼
   cSHAKE256("HeavyHash")
