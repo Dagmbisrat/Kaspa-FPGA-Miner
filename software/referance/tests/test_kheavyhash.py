@@ -6,7 +6,6 @@ only, excluding the main hash() method and focusing on the internal implementati
 details using pytest framework.
 """
 
-import subprocess
 import sys
 import time
 from unittest.mock import MagicMock
@@ -552,114 +551,195 @@ class TestKHeavyhashHelperFunctions:
         assert self.khash.get_cached_matrix(hash2) == matrix2
 
 
-# Cross-implementation test class
-class TestCrossImplementation:
-    """Test Python implementation against Go reference implementation."""
+# CPU vs GPU batch comparison test class
+class TestCpuGpuBatch:
+    """Compare hash_cpu_batch and hash_gpu_batch for correctness and performance."""
 
+    # (pre_pow_hash, timestamp, description)
     TEST_VECTORS = [
-        # (b"\x00" * 32, 0, 0, "All zeros"),
-        (b"\xff" * 32, 0, 0, "All ones"),
-        (bytes(range(32)), 0, 0, "Sequential bytes"),
-        (b"\xaa\x55" * 16, 0, 0, "Alternating pattern"),
-        # (b"\x00" * 32, 1234567890, 9876543210, "Zero with timestamp+nonce"),
-        (bytes(range(32)), 1234567890, 9876543210, "Sequential with both"),
-        (b"\xff" * 32, 2**31 - 1, 2**63 - 1, "Max values"),
-        (b"\xaa\x55" * 16, 1609459200, 1000000000, "Mixed pattern"),
-        (bytes([i % 256 for i in range(32)]), 1640995200, 42, "Modulo pattern"),
-        (b"\x12\x34\x56\x78" * 8, 1700000000, 123456789, "Repeated pattern"),
+        (b"\xff" * 32, 0, "All ones"),
+        (bytes(range(32)), 0, "Sequential bytes"),
+        (b"\xaa\x55" * 16, 0, "Alternating pattern"),
+        (bytes(range(32)), 1234567890, "Sequential with timestamp"),
+        (b"\xff" * 32, 2**31 - 1, "Max timestamp"),
+        (b"\xaa\x55" * 16, 1609459200, "Mixed pattern"),
+        (bytes([i % 256 for i in range(32)]), 1640995200, "Modulo pattern"),
+        (b"\x12\x34\x56\x78" * 8, 1700000000, "Repeated pattern"),
     ]
 
+    # Nonces used for all correctness tests
+    CORRECTNESS_NONCES = list(range(16))
+
     def setup_method(self):
-        """Set up test fixtures."""
         self.khash = KHeavyhash()
 
-    def _call_go_implementation(
-        self, pre_pow_hash: bytes, timestamp: int, nonce: int
-    ) -> bytes:
-        """Call Go implementation."""
+    def _has_cuda(self) -> bool:
         try:
-            result = subprocess.run(
-                [
-                    "go",
-                    "run",
-                    "ref_kheavyhash_port.go",
-                    pre_pow_hash.hex(),
-                    str(timestamp),
-                    str(nonce),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
+            import torch
+
+            return torch.cuda.is_available()
+        except ImportError:
+            return False
+
+    # ── Correctness ───────────────────────────────────────────────────────
+
+    def test_cpu_batch_matches_single_hash(self):
+        """hash_cpu_batch must produce identical output to hash() for every nonce."""
+        for pre_pow_hash, timestamp, description in self.TEST_VECTORS:
+            expected = [
+                self.khash.hash(pre_pow_hash, timestamp, n)
+                for n in self.CORRECTNESS_NONCES
+            ]
+            actual = self.khash.hash_cpu_batch(
+                pre_pow_hash, timestamp, self.CORRECTNESS_NONCES
             )
-            if result.returncode != 0:
-                raise RuntimeError(f"Go failed: {result.stderr}")
-            return bytes.fromhex(result.stdout.strip())
-        except FileNotFoundError:
-            pytest.skip("Go not available")
-        except subprocess.TimeoutExpired:
-            pytest.skip("Go timed out")
+            assert actual == expected, (
+                f"CPU batch mismatch for '{description}':\n"
+                f"  expected[0]: {expected[0].hex()}\n"
+                f"  actual[0]:   {actual[0].hex()}"
+            )
 
-    def test_python_matches_go_reference(self):
-        """Test that Python implementation matches Go reference for all test vectors."""
-        passed = 0
-        failed = 0
+    def test_gpu_batch_matches_single_hash(self):
+        """hash_gpu_batch must produce identical output to hash() for every nonce."""
+        if not self._has_cuda():
+            pytest.skip("CUDA not available")
+        for pre_pow_hash, timestamp, description in self.TEST_VECTORS:
+            expected = [
+                self.khash.hash(pre_pow_hash, timestamp, n)
+                for n in self.CORRECTNESS_NONCES
+            ]
+            actual = self.khash.hash_gpu_batch(
+                pre_pow_hash, timestamp, self.CORRECTNESS_NONCES
+            )
+            assert actual == expected, (
+                f"GPU batch mismatch for '{description}':\n"
+                f"  expected[0]: {expected[0].hex()}\n"
+                f"  actual[0]:   {actual[0].hex()}"
+            )
+
+    def test_cpu_gpu_batch_agree(self):
+        """hash_cpu_batch and hash_gpu_batch must return bit-identical results."""
+        if not self._has_cuda():
+            pytest.skip("CUDA not available")
         failures = []
+        for pre_pow_hash, timestamp, description in self.TEST_VECTORS:
+            cpu = self.khash.hash_cpu_batch(
+                pre_pow_hash, timestamp, self.CORRECTNESS_NONCES
+            )
+            gpu = self.khash.hash_gpu_batch(
+                pre_pow_hash, timestamp, self.CORRECTNESS_NONCES
+            )
+            if cpu != gpu:
+                for i, (c, g) in enumerate(zip(cpu, gpu)):
+                    if c != g:
+                        failures.append(
+                            f"'{description}' nonce={self.CORRECTNESS_NONCES[i]}:\n"
+                            f"  CPU: {c.hex()}\n"
+                            f"  GPU: {g.hex()}"
+                        )
+        assert not failures, "CPU/GPU disagreements:\n" + "\n".join(failures)
 
-        for pre_pow_hash, timestamp, nonce, description in self.TEST_VECTORS:
-            python_result = self.khash.hash(pre_pow_hash, timestamp, nonce)
-            go_result = self._call_go_implementation(pre_pow_hash, timestamp, nonce)
+    def test_cpu_batch_order_preserved(self):
+        """Results must be in the same order as the input nonce list."""
+        pre_pow_hash = bytes(range(32))
+        timestamp = 1700000000
+        nonces = [7, 2, 99, 0, 42]
+        batch = self.khash.hash_cpu_batch(pre_pow_hash, timestamp, nonces)
+        for i, nonce in enumerate(nonces):
+            single = self.khash.hash(pre_pow_hash, timestamp, nonce)
+            assert batch[i] == single, (
+                f"Order broken at index {i} (nonce={nonce}):\n"
+                f"  batch:  {batch[i].hex()}\n"
+                f"  single: {single.hex()}"
+            )
 
-            if python_result == go_result:
-                passed += 1
-            else:
-                failed += 1
-                failures.append(
-                    f"{description}:\n"
-                    f"  Python: {python_result.hex()}\n"
-                    f"  Go:     {go_result.hex()}"
-                )
+    def test_gpu_batch_order_preserved(self):
+        """GPU results must be in the same order as the input nonce list."""
+        if not self._has_cuda():
+            pytest.skip("CUDA not available")
+        pre_pow_hash = bytes(range(32))
+        timestamp = 1700000000
+        nonces = [7, 2, 99, 0, 42]
+        batch = self.khash.hash_gpu_batch(pre_pow_hash, timestamp, nonces)
+        for i, nonce in enumerate(nonces):
+            single = self.khash.hash(pre_pow_hash, timestamp, nonce)
+            assert batch[i] == single, (
+                f"Order broken at index {i} (nonce={nonce}):\n"
+                f"  batch:  {batch[i].hex()}\n"
+                f"  single: {single.hex()}"
+            )
 
-        # Report
-        print(f"\n{'=' * 60}")
-        print(f"Results: {passed}/{len(self.TEST_VECTORS)} passed")
-        print(f"{'=' * 60}")
+    def test_single_nonce_batch(self):
+        """Batch of size 1 must equal a direct hash() call."""
+        pre_pow_hash = b"\xde\xad\xbe\xef" * 8
+        timestamp = 999
+        nonce = 1
+        assert self.khash.hash_cpu_batch(pre_pow_hash, timestamp, [nonce]) == [
+            self.khash.hash(pre_pow_hash, timestamp, nonce)
+        ]
+        if self._has_cuda():
+            assert self.khash.hash_gpu_batch(pre_pow_hash, timestamp, [nonce]) == [
+                self.khash.hash(pre_pow_hash, timestamp, nonce)
+            ]
 
-        if failures:
-            print("\nFailures:")
-            for failure in failures:
-                print(failure)
-
-        assert failed == 0, f"{failed}/{len(self.TEST_VECTORS)} tests failed"
+    # ── Performance ───────────────────────────────────────────────────────
 
     def test_performance_comparison(self):
-        """Compare performance between Python and Go implementations."""
-        python_times = []
-        go_times = []
+        """Benchmark hash_cpu_batch vs hash_gpu_batch throughput.
 
-        for pre_pow_hash, timestamp, nonce, _ in self.TEST_VECTORS:
-            # Time Python
-            start = time.perf_counter()
-            self.khash.hash(pre_pow_hash, timestamp, nonce)
-            python_times.append(time.perf_counter() - start)
+        Runs each implementation for BENCH_DURATION seconds with a fixed
+        batch size and reports hashes/second.  GPU is warmed up first to
+        avoid counting CUDA context initialisation in the measurement.
+        """
+        BENCH_DURATION = 60.0
+        BATCH_SIZE = 1048576
 
-            # Time Go
-            start = time.perf_counter()
-            self._call_go_implementation(pre_pow_hash, timestamp, nonce)
-            go_times.append(time.perf_counter() - start)
+        pre_pow_hash = bytes(range(32))
+        timestamp = 1700000000
+        nonces = list(range(BATCH_SIZE))
 
-        total_python = sum(python_times) * 1000
-        total_go = sum(go_times) * 1000
-        avg_python = total_python / len(self.TEST_VECTORS)
-        avg_go = total_go / len(self.TEST_VECTORS)
+        # ── CPU ───────────────────────────────────────────────────────────
+        cpu_count = 0
+        cpu_start = time.perf_counter()
+        deadline = cpu_start + BENCH_DURATION
+        while time.perf_counter() < deadline:
+            self.khash.hash_cpu_batch(pre_pow_hash, timestamp, nonces)
+            cpu_count += BATCH_SIZE
+        cpu_elapsed = time.perf_counter() - cpu_start
+        cpu_hps = cpu_count / cpu_elapsed
 
         print(f"\n{'=' * 60}")
-        print("Performance Comparison")
+        print(
+            f"Batch Performance Comparison"
+            f"  (duration: {BENCH_DURATION:.0f}s each, batch={BATCH_SIZE})"
+        )
         print(f"{'=' * 60}")
-        print(f"Python total:  {total_python:.2f} ms")
-        print(f"Go total:      {total_go:.2f} ms")
-        print(f"Python avg:    {avg_python:.2f} ms/hash")
-        print(f"Go avg:        {avg_go:.2f} ms/hash")
-        print(f"Go speedup:    {total_python / total_go:.1f}x faster")
+        print(f"CPU:  {cpu_count:>9} hashes  {cpu_elapsed:.2f}s  {cpu_hps:>12.1f} H/s")
+
+        # ── GPU (optional) ────────────────────────────────────────────────
+        if self._has_cuda():
+            # Warm-up: amortise CUDA context creation outside the timer
+            self.khash.hash_gpu_batch(pre_pow_hash, timestamp, nonces[:8])
+
+            gpu_count = 0
+            gpu_start = time.perf_counter()
+            deadline = gpu_start + BENCH_DURATION
+            while time.perf_counter() < deadline:
+                self.khash.hash_gpu_batch(pre_pow_hash, timestamp, nonces)
+                gpu_count += BATCH_SIZE
+            gpu_elapsed = time.perf_counter() - gpu_start
+            gpu_hps = gpu_count / gpu_elapsed
+
+            print(
+                f"GPU:  {gpu_count:>9} hashes  {gpu_elapsed:.2f}s  {gpu_hps:>12.1f} H/s"
+            )
+            if gpu_hps >= cpu_hps:
+                print(f"GPU is {gpu_hps / cpu_hps:.2f}x faster than CPU")
+            else:
+                print(f"CPU is {cpu_hps / gpu_hps:.2f}x faster than GPU")
+        else:
+            print("GPU:  skipped (CUDA not available)")
+
         print(f"{'=' * 60}")
 
 

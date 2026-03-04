@@ -10,6 +10,7 @@ from string import printable
 from typing import List, Optional, Tuple
 from webbrowser import get
 
+import torch
 from Crypto.Hash import cSHAKE256
 from Crypto.Hash.keccak import _raw_keccak_lib
 from Crypto.Util._raw_api import (
@@ -69,6 +70,135 @@ class KHeavyhash:
         final_hash = self._cshake256_myImplimentaion(digest, 32, "", "HeavyHash")
 
         return final_hash
+
+    def hash_gpu_batch(
+        self, pre_pow_hash: bytes, timestamp: int, nonces: List[int]
+    ) -> List[bytes]:
+        """
+        Compute kHeavyHash for multiple nonces using a single GPU-batched GEMV.
+
+        Uploads the matrix to GPU once per block, then processes all nonces in
+        one (64,64)@(64,N) matrix multiply, minimizing PCIe round-trips and
+        kernel-launch overhead.
+
+        float32 is safe here: max dot product = 64 * 15 * 15 = 14,400,
+        well within float32's exact integer range of 2^24 = 16,777,216.
+
+        Args:
+            pre_pow_hash: 32-byte block header hash (matrix seed)
+            timestamp: 64-bit UNIX timestamp
+            nonces: batch of nonce values to evaluate
+
+        Returns:
+            List of 32-byte final hashes, one per nonce, in input order
+        """
+        import torch
+
+        matrix = self._generate_matrix(pre_pow_hash)
+
+        # Upload matrix once; reuse for entire batch
+        mat_gpu = torch.tensor(matrix, dtype=torch.float32, device="cuda")  # (64, 64)
+
+        # CPU: cSHAKE256 has no GPU kernel — compute pow_hash per nonce
+        pow_hashes = []
+        for nonce in nonces:
+            header = self._construct_header(pre_pow_hash, timestamp, nonce)
+            pow_hashes.append(
+                self._cshake256_myImplimentaion(header, 32, "", "ProofOfWorkHash")
+            )
+
+        # Vectorized nibble extraction via numpy — avoids Python loops
+        import numpy as np
+
+        pow_array = np.frombuffer(b"".join(pow_hashes), dtype=np.uint8).reshape(
+            len(nonces), 32
+        )
+        vectors_np = np.empty((len(nonces), 64), dtype=np.float32)
+        vectors_np[:, 0::2] = (pow_array >> 4) & 0xF  # upper nibbles at even indices
+        vectors_np[:, 1::2] = pow_array & 0xF  # lower nibbles at odd indices
+
+        # Single batched GEMV: (64,64) @ (64,N) = (64,N)
+        vecs_gpu = torch.from_numpy(vectors_np).to("cuda").T  # (64, N)
+        dot_products = (mat_gpu @ vecs_gpu).to(torch.int64)  # (64, N)
+        normalized = (
+            ((dot_products >> 10) & 0xF).T.cpu().numpy().astype(np.int32)
+        )  # (N, 64)
+
+        # Vectorized XOR recombination on CPU
+        upper_nibbles = normalized[:, 0::2]  # (N, 32)
+        lower_nibbles = normalized[:, 1::2]  # (N, 32)
+        recombined = ((upper_nibbles << 4) | lower_nibbles).astype(np.uint8)  # (N, 32)
+        xored = recombined ^ pow_array  # (N, 32)
+
+        # Final cSHAKE256 per nonce (CPU only)
+        results = []
+        for i in range(len(nonces)):
+            results.append(
+                self._cshake256_myImplimentaion(bytes(xored[i]), 32, "", "HeavyHash")
+            )
+        return results
+
+    def hash_cpu_batch(
+        self, pre_pow_hash: bytes, timestamp: int, nonces: List[int]
+    ) -> List[bytes]:
+        """
+        Compute kHeavyHash for multiple nonces optimized for multi-core CPU.
+
+        Uses numpy for vectorized batched GEMV and concurrent.futures to
+        parallelize cSHAKE256 calls across CPU cores. PyCryptodome's raw
+        Keccak C extension releases the GIL, so threads run truly in parallel.
+
+        Args:
+            pre_pow_hash: 32-byte block header hash (matrix seed)
+            timestamp: 64-bit UNIX timestamp
+            nonces: batch of nonce values to evaluate
+
+        Returns:
+            List of 32-byte final hashes, one per nonce, in input order
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        import numpy as np
+
+        matrix = self._generate_matrix(pre_pow_hash)
+        mat_np = np.array(matrix, dtype=np.int32)  # (64, 64)
+
+        # Parallel ProofOfWorkHash — GIL released by C Keccak extension
+        def _pow_hash(nonce: int) -> bytes:
+            header = self._construct_header(pre_pow_hash, timestamp, nonce)
+            return self._cshake256_myImplimentaion(header, 32, "", "ProofOfWorkHash")
+
+        with ThreadPoolExecutor() as ex:
+            pow_hashes = list(ex.map(_pow_hash, nonces))
+
+        # Vectorized nibble extraction
+        pow_array = np.frombuffer(b"".join(pow_hashes), dtype=np.uint8).reshape(
+            len(nonces), 32
+        )
+        vectors = np.empty((len(nonces), 64), dtype=np.int32)
+        vectors[:, 0::2] = (pow_array >> 4) & 0xF
+        vectors[:, 1::2] = pow_array & 0xF
+
+        # Batched GEMV via numpy (uses BLAS under the hood)
+        dot_products = vectors @ mat_np.T  # (N, 64)
+        normalized = (dot_products >> 10) & 0xF  # (N, 64)
+
+        # Vectorized XOR recombination
+        upper_nibbles = normalized[:, 0::2]  # (N, 32)
+        lower_nibbles = normalized[:, 1::2]  # (N, 32)
+        recombined = ((upper_nibbles << 4) | lower_nibbles).astype(np.uint8)  # (N, 32)
+        xored = recombined ^ pow_array  # (N, 32)
+
+        # Parallel HeavyHash — GIL released by C Keccak extension
+        def _final_hash(digest: bytes) -> bytes:
+            return self._cshake256_myImplimentaion(digest, 32, "", "HeavyHash")
+
+        with ThreadPoolExecutor() as ex:
+            results = list(
+                ex.map(_final_hash, [bytes(xored[i]) for i in range(len(nonces))])
+            )
+
+        return results
 
     def _construct_header(
         self, pre_pow_hash: bytes, timestamp: int, nonce: int
@@ -450,6 +580,18 @@ class KHeavyhash:
             normalized_value = (dot_product >> 10) & 0xF
             result.append(normalized_value)
         return result
+
+    def _matrix_vector_multiply_GPU(
+        self, matrix: List[List[int]], vector: List[int]
+    ) -> List[int]:
+        mat = torch.tensor(matrix, dtype=torch.float64, device="cuda")  # (64, 64)
+        vec = torch.tensor(vector, dtype=torch.float64, device="cuda")  # (64,)
+
+        dot_products = (mat @ vec).to(torch.int64)  # (64,) — back to int for bit ops
+
+        normalized = (dot_products >> 10) & 0xF
+
+        return normalized.cpu().tolist()
 
     def _xor_with_hash(self, product_vector: List[int], original_hash: bytes) -> bytes:
         """
