@@ -10,7 +10,6 @@ from string import printable
 from typing import List, Optional, Tuple
 from webbrowser import get
 
-import torch
 from Crypto.Hash import cSHAKE256
 from Crypto.Hash.keccak import _raw_keccak_lib
 from Crypto.Util._raw_api import (
@@ -584,6 +583,7 @@ class KHeavyhash:
     def _matrix_vector_multiply_GPU(
         self, matrix: List[List[int]], vector: List[int]
     ) -> List[int]:
+        import torch
         mat = torch.tensor(matrix, dtype=torch.float64, device="cuda")  # (64, 64)
         vec = torch.tensor(vector, dtype=torch.float64, device="cuda")  # (64,)
 
