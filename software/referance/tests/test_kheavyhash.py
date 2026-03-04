@@ -692,7 +692,7 @@ class TestCpuGpuBatch:
         avoid counting CUDA context initialisation in the measurement.
         """
         BENCH_DURATION = 60.0
-        BATCH_SIZE = 1048576
+        BATCH_SIZE = 1024
 
         pre_pow_hash = bytes(range(32))
         timestamp = 1700000000
