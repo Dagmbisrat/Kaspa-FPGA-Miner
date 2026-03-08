@@ -1,6 +1,6 @@
 # KasMiner — Kaspa FPGA Miner (KHeavyHash)
 
-An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, targeting Xilinx Kintex-7 FPGAs — starting on the **XC7K160T** for development and scaling to the **XC7K325T** for full throughput.
+An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, targeting Xilinx Kintex-7 FPGAs — starting on the **XC7K70T** for development and scaling to the **XC7K325T** for full throughput.
 
 > ⚠️ **Status:** Work in progress — single core verified in simulation, moving toward throughput-optimised multi-core architecture and host interface integration.
 
@@ -11,7 +11,7 @@ An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algor
 This project is built as a **throughput-first FPGA accelerator**, not just a miner.
 
 Primary objective:
-> Maximise hashes per second per watt on Kintex-7 through deep pipelining and parallel core replication — validated on the XC7K160T, then scaled to the XC7K325T.
+> Maximise hashes per second per watt on Kintex-7 through deep pipelining and parallel core replication — validated on the XC7K70T, then scaled to the XC7K325T.
 
 Development order:
 1. Optimise **one core** for maximum Fmax and clean timing
@@ -54,7 +54,7 @@ The current core is functional but not yet pipelined for maximum Fmax. Planned w
 - Pipeline Keccak-f[1600] rounds
 - Pipeline the matmul accumulator
 - Register stage boundaries aggressively to remove long combinational paths
-- Target: **180–220 MHz** on XC7K160T (baseline), then XC7K325T
+- Target: **180–220 MHz** on XC7K70T (baseline), then XC7K325T
 
 At full pipeline depth, throughput per core approaches:
 
@@ -70,7 +70,7 @@ After single-core optimisation, multiple cores will be replicated via generate l
 Total_Throughput = Fmax × Core_Count
 ```
 
-Target range on XC7K160T: **~1–2 GH/s** (resource-constrained). Scaling to **2–4 GH/s** on XC7K325T once validated.
+Target range on XC7K70T: **~1–2 GH/s** (resource-constrained). Scaling to **2–4 GH/s** on XC7K325T once validated.
 
 ### Host Interface (Planned)
 
@@ -136,13 +136,13 @@ Progress and planned work — updated as phases complete.
 - [x] Matrix-vector multiply unit
 - [x] Single `core` (full kHeavyHash pipeline) + verification
 - [ ] Pipeline optimisation (Keccak rounds, matmul accumulator)
-- [ ] Achieve ≥180 MHz timing on XC7K160T
+- [ ] Achieve ≥180 MHz timing on XC7K70T
 - [ ] Measure LUT / DSP / BRAM usage per core
-- [ ] Confirm fit within XC7K160T resources
+- [ ] Confirm fit within XC7K70T resources
 
-### Phase 2 — Multi-Core (XC7K160T)
-- [ ] 4-core stable build on XC7K160T
-- [ ] Determine routing ceiling on XC7K160T
+### Phase 2 — Multi-Core (XC7K70T)
+- [ ] 4-core stable build on XC7K70T
+- [ ] Determine routing ceiling on XC7K70T
 - [ ] Measure GH/s scaling vs core count
 
 ### Phase 2b — Scale to XC7K325T
@@ -167,7 +167,7 @@ Progress and planned work — updated as phases complete.
 ## Goals
 
 - Correct, fully verified KHeavyHash implementation in RTL
-- Validated on XC7K160T, scaled to XC7K325T for full throughput
+- Validated on XC7K70T, scaled to XC7K325T for full throughput
 - Scalable multi-core FPGA accelerator targeting ~1–2 GH/s (160T) → 2–4 GH/s (325T)
 - PCIe-connected high-throughput compute engine
 - Maximise hashes/sec per watt through pipelining and parallelism
