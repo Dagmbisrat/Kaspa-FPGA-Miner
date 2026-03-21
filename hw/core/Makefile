@@ -1,6 +1,8 @@
 MODULE  = core
 TOP     = core_tb
+TOP_BENCH = core_bench_tb
 OBJDIR  = /tmp/core_build
+OBJDIR_BENCH = /tmp/core_bench_build
 VECTORS = sim/expected_vectors.mem
 
 # Dependency paths (relative to this Makefile)
@@ -24,13 +26,15 @@ SRC = \
 
 TB = tb/core_tb.sv
 
-.PHONY: all clean wave vectors help
+.PHONY: all clean wave vectors bench bench_wave help
 
 help:
 	@echo "Usage:"
 	@echo "  make runtest     - Generate vectors, compile, and run testbench"
 	@echo "  make wave        - Generate vectors, compile, run, and open waveform"
 	@echo "  make vectors     - Generate test vectors from Python reference"
+	@echo "  make bench       - Compile and run benchmark testbench"
+	@echo "  make bench_wave  - Compile, run benchmark, and open waveform"
 	@echo "  make clean       - Remove generated files"
 
 vectors:
@@ -43,5 +47,12 @@ runtest: vectors
 wave: runtest
 	gtkwave sim/$(TOP).vcd
 
+bench:
+	verilator --binary --timing --trace -j 0 -Wno-fatal --top-module $(TOP_BENCH) --Mdir $(OBJDIR_BENCH) $(SRC) tb/$(TOP_BENCH).sv
+	$(OBJDIR_BENCH)/V$(TOP_BENCH)
+
+bench_wave: bench
+	gtkwave sim/$(TOP_BENCH).vcd
+
 clean:
-	rm -rf $(OBJDIR) sim/$(TOP).vcd $(VECTORS)
+	rm -rf $(OBJDIR) $(OBJDIR_BENCH) sim/$(TOP).vcd sim/$(TOP_BENCH).vcd $(VECTORS)
