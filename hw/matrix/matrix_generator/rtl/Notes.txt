@@ -1,0 +1,95 @@
+Matrix Generation Steps:
+
+    Input:
+        PrePowerHash (32 bytes)
+
+    Output:
+        Matrix (64 x 64 - 4 bits each)
+
+    Steps:
+    
+    1. Check PrePowHash is not the same one used in the previous matrix generation. 
+    If it is, then skip the rest of the steps and return the previously generated matrix from the cache.
+        - This is to prevent generating the same matrix multiple times.
+
+    2. Initalize a state 
+        - Splits the PrePowerHash (32 bytes) into four 64-bit little-endian integers
+            Example: PrePowerHash = 0xdeadbeefdeadbeef0123456789abcdeffacefeeddeafbeefdeed12345678face
+            State[0] = 0xefbeaddeefbeadde
+            State[1] = 0xefcdab8967452301
+            State[2] = 0xefbeafdeedfecefa
+            State[3] = 0xcefa78563412edde
+
+    3. Genrate the matrix 
+        - For each row i in the matrix (0 to 63):
+            - For each 16th column j in the matrix (0 to 3):
+                create a 64-value from 'xoshiro256++' useing the state from the previous step
+                then save each 4 bits of the 64-value into the matrix at position (i, j*16) to (i, j*16 + 15)
+    
+    4. Cache the generated matrix with the PrePowHash as the key for future reference.
+
+
+=========================================================================================================================================================================
+==========================================================================================================================================================================
+
+Piplined version which should fit timeing.
+    - Could also be checking simontanously for a full rank matrix and if not, then generate another one. This would be more efficient as it would save time by not having to wait for the full matrix to be generated before checking for rank.
+    - Since this is would increase complexity, we can ignore this for now and just generate the full matrix. The chance of a non full rank is very low, so it should not be a big issue. We can always optimize this later if needed.
+
+Issue with pipelining is that we would need to have a way to store the intermediate state of the matrix generation, which might cause issues with cashing here.
+
+Caching vs Pipelining are mutually exclusive solutions to the same problem:
+    - Cache: matrix gen is slow, so avoid re-running it for the same PrePowHash.
+    - Pipelining: make matrix gen fast enough that re-running it is cheap.
+
+    If the matrix gen IP is pipelined (low latency), the cache's justification disappears entirely.
+    In hardware, invocation is controlled externally — matrix gen is triggered once when a new
+    PrePowHash arrives (new block signal), the result is stored in a register file / BRAM,
+    and all nonce iterations read from that storage. On block change, flush and regenerate.
+
+    Since block transitions are infrequent (every few seconds), even hundreds of cycles of
+    regeneration latency has negligible throughput impact. Combining both (cache + pipeline)
+    would add hash comparison logic, extra storage, and control complexity for zero benefit.
+
+
+Throughput Impact of Setup-then-Pipeline Design:
+    From the core's perspective, matrix gen is a one-time setup call before the hashing
+    pipeline starts for each new PrePowHash. It is completely off the critical path and
+    does not affect individual nonce computation throughput.
+
+    Matrix gen is a one-time setup call per new PrePowHash, triggered externally before
+    the hashing pipeline starts. It is completely off the critical path.
+
+
+    Actual latency (sequential design, single pass):
+        - GENERATE_MATRIX : 256 cycles  (256 xoshiro256++ calls)
+        - matrix_rankcheck: 131–323 cycles  (LOAD 64 + FLUSH 1 + ELIM 64–256 + DONE 1)
+        - State overhead  : ~3 cycles
+        - Total           : ~390–582 cycles (~2–3 µs at 200 MHz)
+
+    Throughput impact:
+        - Kaspa block time ~100ms (10 bps) = ~20M cycles at 200 MHz (XC7K325T-1 -1 grade)
+        - Worst-case setup overhead ≈ 0.003% — negligible
+
+    Pipelining matrix gen was considered but rejected:
+        - Caching and pipelining are mutually exclusive solutions to the same problem.
+          Cache avoids re-running expensive generation; pipelining makes re-running cheap.
+          Since the core controls invocation (triggered once per block), neither is needed
+          beyond the simple sequential design.
+        - At ~2–3 µs setup vs 100ms block window, there is no throughput justification
+          for the added complexity.
+        - Double-buffering (background matrix gen while pipeline runs) also rejected —
+          pure over-engineering for no measurable gain.
+
+    This only becomes an issue if:
+        1. Block times become extremely short (not the case for Kaspa)
+        2. Matrix gen latency is very long (it is not — xoshiro256++ is trivial)
+        3. Very few nonces are attempted per block (not the case in mining)
+
+    Double-buffering (generating the next matrix in the background while the current
+    pipeline runs) is possible but unnecessary given the numbers above — pure over-engineering
+    for no measurable gain.
+
+    
+    Conclusion: Simple sequential design is optimal. The bottleneck is the hashing
+    pipeline itself, not the setup step.
