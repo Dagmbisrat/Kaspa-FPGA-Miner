@@ -22,8 +22,9 @@ localparam int NUM_ROUNDS = 24;
 logic [RATE_BITS-1:0]  pr0;           // After stage 0: encoded message block
 logic [STATE_BITS-1:0] pr [1:25];     // After stage 1 (XOR) through stage 25 (Round 23)
 
-// Valid shift register — tracks which stages hold live data
-logic [26:0] valid_sr;
+// Valid shift register — 26 bits so valid_sr[25] asserts on the same edge
+// that pr[25] is written (cycle 26), matching the Notes.txt timing diagram.
+logic [25:0] valid_sr;
 
 
 // ********************** Stage 0 : Encode Msg  ****************************
@@ -56,7 +57,7 @@ end
 
 always_ff @(posedge clk) begin
     pr0      <= stage0_comb;
-    valid_sr <= {valid_sr[25:0], valid_in};
+    valid_sr <= {valid_sr[24:0], valid_in};
 end
 // -------------------------------------------------------------------------
 
@@ -173,7 +174,7 @@ endgenerate
 // -------------------------------------------------------------------------
 // pr[25] is already a register just wire the first 256 bits out
 assign hash_out  = pr[25][255:0];
-assign valid_out = valid_sr[26];
+assign valid_out = valid_sr[25];
 // -------------------------------------------------------------------------
 
 endmodule
