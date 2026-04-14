@@ -68,41 +68,65 @@ logic [STATE_BITS-1:0] stage1_comb;
 
 // Pre-computed SpongeState constants (post-header Keccak-f output)
 // Lane ordering: lane_idx = x + 5*y  (matches absorb module convention)
-localparam logic [63:0] SPONGE_POW [0:24] = '{
-    // y=0: lanes 0-4
-    64'hb08dee036fe1cdd5, 64'h833533355cc91b1f, 64'h8808752c531a506b,
-    64'h4670ce44b2606c77, 64'h039a6a5bae88e5ad,
-    // y=1: lanes 5-9
-    64'hedb7cd4412115b98, 64'hcb86952ca553ad6a, 64'h488d68534b3d84ff,
-    64'h8a6531470cf6cebf, 64'h09acbd0b98e33f2c,
-    // y=2: lanes 10-14
-    64'he9fbf67c0a5d01bc, 64'h30f583bd38d2bed7, 64'hd18c0bf6288590ab,
-    64'h9704ebe8b6ecf519, 64'h16f6f9aad0cf8e7c,
-    // y=3: lanes 15-19
-    64'h1643b28f559f8650, 64'h0488e01dde10bd17, 64'h3c20a7939bc9c51a,
-    64'h948d74ea54364de6, 64'h681f2c0817428514,
-    // y=4: lanes 20-24
-    64'haddedab19c1e9c60, 64'h5013c7d572442445, 64'h9e5bfcc18274e2e3,
-    64'h5779ac19c74d66c0, 64'h851e49cfc7997a73
-};
+// Keccak-f[1600] output state — paste into .sv
+logic [63:0] SPONGE_POW [0:24];
+initial begin
+    SPONGE_POW[ 0] = 64'h113cff0da1f6d83d;  // A[0][0]
+    SPONGE_POW[ 1] = 64'h29bf8855b7027e3c;  // A[1][0]
+    SPONGE_POW[ 2] = 64'h1e5f2e720efb44d2;  // A[2][0]
+    SPONGE_POW[ 3] = 64'h1ba5a4a3f59869a0;  // A[3][0]
+    SPONGE_POW[ 4] = 64'h7b2fafca875e2d65;  // A[4][0]
+    SPONGE_POW[ 5] = 64'h4aef61d629dce246;  // A[0][1]
+    SPONGE_POW[ 6] = 64'h183a981ead415b10;  // A[1][1]
+    SPONGE_POW[ 7] = 64'h776bf60c789bc29c;  // A[2][1]
+    SPONGE_POW[ 8] = 64'hf8ebf13388663140;  // A[3][1]
+    SPONGE_POW[ 9] = 64'h2e651c3c43285ff0;  // A[4][1]
+    SPONGE_POW[10] = 64'h0f96070540f14a0e;  // A[0][2]
+    SPONGE_POW[11] = 64'h44e367875b299152;  // A[1][2]
+    SPONGE_POW[12] = 64'hec70f1a425b13715;  // A[2][2]
+    SPONGE_POW[13] = 64'he6c85d8f82e9da89;  // A[3][2]
+    SPONGE_POW[14] = 64'hb21a601f85b4b223;  // A[4][2]
+    SPONGE_POW[15] = 64'h3485549064a36a46;  // A[0][3]
+    SPONGE_POW[16] = 64'h8f06dd1c7a2f851a;  // A[1][3]
+    SPONGE_POW[17] = 64'hc1a2021d563bb142;  // A[2][3]
+    SPONGE_POW[18] = 64'hba1de5e4451668e4;  // A[3][3]
+    SPONGE_POW[19] = 64'hd102574105095f8d;  // A[4][3]
+    SPONGE_POW[20] = 64'h89ca4e849bcecf4a;  // A[0][4]
+    SPONGE_POW[21] = 64'h48b09427a8742edb;  // A[1][4]
+    SPONGE_POW[22] = 64'hb1fcce9ce78b5272;  // A[2][4]
+    SPONGE_POW[23] = 64'h5d1129cf82afa5bc;  // A[3][4]
+    SPONGE_POW[24] = 64'h02b97c786f824383;  // A[4][4]
+end
 
-localparam logic [63:0] SPONGE_HH [0:24] = '{
-    // y=0: lanes 0-4
-    64'h1e8357896603c46c, 64'hf45a9a0a20f85dfd, 64'ha0d4b7bbb21581ce,
-    64'hdfc8b7581c89ed05, 64'h526d742699e6426c,
-    // y=1: lanes 5-9
-    64'h473d100eb0263063, 64'h085f315a4476a9a0, 64'h9293d1bb86123413,
-    64'ha81675ed0bf6929b, 64'h003849b026e0582b,
-    // y=2: lanes 10-14
-    64'h660a8aaf532af32f, 64'h3996ac6c067589a2, 64'hcbb3b88519c0308e,
-    64'hb0cc3b0e1ecc7d73, 64'h6fc0c572a9710157,
-    // y=3: lanes 15-19
-    64'hfa70d4a9cb9e4a1a, 64'hc88462ad7b5f93a9, 64'h49c385e6b62d7460,
-    64'hb4b2139c7d16f1bf, 64'h7a057b83d0befedf,
-    // y=4: lanes 20-24
-    64'hb269a02fb7ef4570, 64'h12cc3c946368d4b8, 64'h8384630610f619c8,
-    64'hc727a285ee3646ec, 64'h70a6245ffa7125e2
-};
+// Keccak-f[1600] output state — paste into .sv
+logic [63:0] SPONGE_HH [0:24];
+initial begin
+    SPONGE_HH[ 0] = 64'h3ad74c52b2248509;  // A[0][0]
+    SPONGE_HH[ 1] = 64'h79629b0e2f9f4216;  // A[1][0]
+    SPONGE_HH[ 2] = 64'h7a14ff4816c7f8ee;  // A[2][0]
+    SPONGE_HH[ 3] = 64'h11a75f4c80056498;  // A[3][0]
+    SPONGE_HH[ 4] = 64'he720e0df44eecede;  // A[4][0]
+    SPONGE_HH[ 5] = 64'h72c7d82e14f34069;  // A[0][1]
+    SPONGE_HH[ 6] = 64'hc100ff2a938935ba;  // A[1][1]
+    SPONGE_HH[ 7] = 64'h5e219040250fc462;  // A[2][1]
+    SPONGE_HH[ 8] = 64'h8039f9a60dcf6a48;  // A[3][1]
+    SPONGE_HH[ 9] = 64'ha0bcaa9f792a3d0c;  // A[4][1]
+    SPONGE_HH[10] = 64'hf431c05dd0a9a226;  // A[0][2]
+    SPONGE_HH[11] = 64'hd31f4cc354c18c3f;  // A[1][2]
+    SPONGE_HH[12] = 64'h6c6b7d01a769cc3d;  // A[2][2]
+    SPONGE_HH[13] = 64'h2ec65bd3562493e4;  // A[3][2]
+    SPONGE_HH[14] = 64'h4ef74b3a99cdb044;  // A[4][2]
+    SPONGE_HH[15] = 64'h774c86835434f2b0;  // A[0][3]
+    SPONGE_HH[16] = 64'h87e961b036bc9416;  // A[1][3]
+    SPONGE_HH[17] = 64'h7e8f1db17765cc07;  // A[2][3]
+    SPONGE_HH[18] = 64'hea8fdb80bac46d39;  // A[3][3]
+    SPONGE_HH[19] = 64'hb992f2d37b34ca58;  // A[4][3]
+    SPONGE_HH[20] = 64'hc776c5048481b957;  // A[0][4]
+    SPONGE_HH[21] = 64'h47c39f675112c22e;  // A[1][4]
+    SPONGE_HH[22] = 64'h92bb399db5290c0a;  // A[2][4]
+    SPONGE_HH[23] = 64'h549ae0312f9fc615;  // A[3][4]
+    SPONGE_HH[24] = 64'h1619327d10b9da35;  // A[4][4]
+end
 
 always_comb begin
     // Lanes 0-16 (rate): XOR formatted block lanes into SpongeState constant

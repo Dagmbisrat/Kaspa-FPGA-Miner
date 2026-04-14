@@ -1,105 +1,138 @@
 #!/usr/bin/env python3
 """
-Generate test vectors for cshake256_core.
+Generate test vectors for cshake256_pipelined_core.
 
-Core interface:
-  - data_in[639:0]   : up to 80-byte message (640 bits)
-  - data_80byte       : 0 = 32-byte input, 1 = 80-byte input
-  - s_value           : 0 = S="ProofOfWorkHash", 1 = S="HeavyHash"
-  - hash_out[255:0]   : 32-byte cSHAKE256 digest
+Hash computation
+---------------
+The hardware stage0 block is:
+    left_encode(bitlen(X)) || X || 0x04 || zeros || 0x80
 
-Each test in the .mem file is 15 x 64-bit hex words:
-  Word 0    : control  (bit 0 = s_value, bit 1 = data_80byte)
-  Words 1-10: data_in  (10 lanes, little-endian, 640 bits)
-  Words 11-14: expected hash (4 lanes, little-endian)
+So to match the hardware we pre-encode X before passing it to the reference
+cSHAKE implementation (which absorbs its data argument raw):
+
+    encoded = left_encode(bitlen(X)) + X
+    hash    = _cshake256_myImplimentaion(encoded, 32, "", S)
+
+This is equivalent to the NIST encode_string(X) wrapping and matches
+what the RTL sponge constants (SPONGE_POW / SPONGE_HH) were derived for.
+
+Vector file layout (16 tests total):
+  Words   0 – 119 : 8 HeavyHash tests      (s_value=1, 32-byte input)
+  Words 120 – 239 : 8 ProofOfWorkHash tests (s_value=0, 80-byte input)
+
+Each test block = 15 x 64-bit hex words:
+  Word  0    : control  (bit 0 = s_value, bit 1 = data_80byte)
+  Words 1-10 : data_in  (10 little-endian 64-bit lanes)
+  Words 11-14: expected hash (4 little-endian 64-bit lanes)
 
 Requires: pip install pycryptodome
 """
 
 import os
 import struct
+import random
+import sys
 
-from Crypto.Hash import cSHAKE256
+# ── Import reference cSHAKE implementation ───────────────────────────────────
+# Repo layout:  hw/crypto/cshake256/sim/gen_vectors.py
+#               software/referance/kheavyhash_ref.py
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+sys.path.insert(0, os.path.join(_REPO_ROOT, 'software', 'referance'))
+from kheavyhash_ref import KHeavyhash  # noqa: E402
+
+_KH = KHeavyhash()
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_LANES  = 10
+HASH_LANES  = 4
+S_NAMES     = {0: "ProofOfWorkHash", 1: "HeavyHash"}
 
-S_STRINGS = {
-    0: b"ProofOfWorkHash",
-    1: b"HeavyHash",
-}
+random.seed(0xDEAD_BEEF)  # reproducible
 
-DATA_LANES = 10  # 640 bits / 64 = 10 lanes
-HASH_LANES = 4   # 256 bits / 64 = 4 lanes
 
-# Test inputs: (s_value, data_80byte, data_in_bytes)
-TEST_CASES = [
-    # --- 32-byte inputs (HeavyHash) ---
-    # All zeros
-    (1, 0, bytes(32)),
-    # Incrementing bytes
-    (1, 0, bytes(range(32))),
-    # All 0xFF
-    (1, 0, bytes([0xFF] * 32)),
-    # Random-ish pattern
-    (1, 0, bytes([i ^ 0xA5 for i in range(32)])),
+def rand_bytes(n: int) -> bytes:
+    return bytes(random.randint(0, 255) for _ in range(n))
 
-    # --- 80-byte inputs (ProofOfWorkHash) ---
-    # All zeros
-    (0, 1, bytes(80)),
-    # Incrementing bytes
-    (0, 1, bytes(range(80))),
-    # All 0xFF
-    (0, 1, bytes([0xFF] * 80)),
-    # Single byte set
-    (0, 1, b"\x01" + bytes(79)),
-    # Random-ish pattern
-    (0, 1, bytes([i ^ 0xA5 for i in range(80)])),
-    # Another pattern
-    (0, 1, bytes([(i * 7 + 3) & 0xFF for i in range(80)])),
+
+# ── 8 HeavyHash tests  (s_value=1, 32-byte input) ───────────────────────────
+HH_CASES = [
+    (1, 0, bytes(range(32))),                                  # incrementing
+    (1, 0, bytes([0xFF] * 32)),                                # all ones
+    (1, 0, bytes([i ^ 0xA5 for i in range(32)])),             # XOR-A5
+    (1, 0, bytes([i ^ 0x5A for i in range(32)])),             # XOR-5A
+    (1, 0, bytes([0x01] + [0x00] * 31)),                      # single LSB
+    (1, 0, bytes([(i * 31 + 7) & 0xFF for i in range(32)])),  # linear
+    (1, 0, rand_bytes(32)),                                    # random-1
+    (1, 0, rand_bytes(32)),                                    # random-2
 ]
+
+# ── 8 ProofOfWorkHash tests  (s_value=0, 80-byte input) ─────────────────────
+POW_CASES = [
+    (0, 1, bytes(range(80))),                                  # incrementing
+    (0, 1, bytes([0xFF] * 80)),                                # all ones
+    (0, 1, bytes([i ^ 0xA5 for i in range(80)])),             # XOR-A5
+    (0, 1, bytes([i ^ 0x5A for i in range(80)])),             # XOR-5A
+    (0, 1, bytes([0x01] + [0x00] * 79)),                      # single LSB
+    (0, 1, bytes([(i * 31 + 7) & 0xFF for i in range(80)])),  # linear
+    (0, 1, rand_bytes(80)),                                    # random-1
+    (0, 1, rand_bytes(80)),                                    # random-2
+]
+
+ALL_CASES = HH_CASES + POW_CASES
+NUM_HH    = len(HH_CASES)   # must match NUM_HH_TESTS  in cshake256_tb.sv
+NUM_POW   = len(POW_CASES)  # must match NUM_POW_TESTS in cshake256_tb.sv
+
+
+def left_encode(value: int) -> bytes:
+    """NIST SP 800-185 left_encode."""
+    if value == 0:
+        return b"\x01\x00"
+    n = (value.bit_length() + 7) // 8
+    return bytes([n]) + value.to_bytes(n, "big")
+
+
+def cshake256_hash(s_val: int, data: bytes) -> bytes:
+    """
+    Compute the hash exactly as the RTL does.
+
+    Stage0 places left_encode(bitlen(data)) before the raw bytes, so we
+    pre-encode here before handing off to the reference implementation which
+    absorbs its data argument raw (no length prefix of its own).
+    """
+    encoded = left_encode(len(data) * 8) + data   # = encode_string(data)
+    return _KH._cshake256_myImplimentaion(encoded, 32, "", S_NAMES[s_val])
 
 
 def bytes_to_lanes(b: bytes, num_lanes: int) -> list[int]:
-    """Convert bytes to N x 64-bit little-endian lanes, zero-padded."""
     padded = b.ljust(num_lanes * 8, b"\x00")
     return list(struct.unpack(f"<{num_lanes}Q", padded))
 
 
-def compute_cshake256(s_value: int, data: bytes) -> bytes:
-    """Compute cSHAKE256(X=data, N=b'', S=S_STRINGS[s_value]), 32-byte output."""
-    h = cSHAKE256.new(data=data, custom=S_STRINGS[s_value])
-    return h.read(32)
+def main() -> None:
+    lines: list[str] = []
 
-
-def main():
-    lines = []
-    for i, (s_val, is_80byte, data_in) in enumerate(TEST_CASES):
-        expected = compute_cshake256(s_val, data_in)
-
-        # Control word: bit 0 = s_value, bit 1 = data_80byte
-        control = s_val | (is_80byte << 1)
+    for idx, (s_val, is_80, data) in enumerate(ALL_CASES):
+        digest  = cshake256_hash(s_val, data)
+        control = s_val | (is_80 << 1)
         lines.append(f"{control:016x}")
 
-        # data_in lanes (10 x 64-bit, zero-padded for 32-byte inputs)
-        for lane in bytes_to_lanes(data_in, DATA_LANES):
+        for lane in bytes_to_lanes(data, DATA_LANES):
             lines.append(f"{lane:016x}")
 
-        # expected hash lanes
-        for lane in bytes_to_lanes(expected, HASH_LANES):
+        for lane in bytes_to_lanes(digest, HASH_LANES):
             lines.append(f"{lane:016x}")
 
-        nbytes = 80 if is_80byte else 32
-        print(f"Test {i}: s_value={s_val} data_80byte={is_80byte} ({nbytes}B) S={S_STRINGS[s_val].decode()!r}")
-        print(f"  data_in : {data_in.hex()}")
-        print(f"  expected: {expected.hex()}")
+        nbytes = 80 if is_80 else 32
+        print(f"Test {idx:2d}  [{S_NAMES[s_val]:>15s}]  {nbytes:2d}B  "
+              f"data={data[:6].hex()}…  hash={digest.hex()}")
 
     out_path = os.path.join(SCRIPT_DIR, "expected_vectors.mem")
     with open(out_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    print(
-        f"\nWrote {len(TEST_CASES)} tests ({len(lines)} words) to {out_path}"
-    )
+    print(f"\nGroups : {NUM_HH} HeavyHash + {NUM_POW} ProofOfWorkHash = {len(ALL_CASES)} tests")
+    print(f"Wrote  : {len(lines)} words → {out_path}")
 
 
 if __name__ == "__main__":
