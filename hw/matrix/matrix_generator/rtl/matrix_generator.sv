@@ -38,12 +38,11 @@ module matrix_generator (
   assign rd_en = rd_en_gen || rd_en_rank;
 
   // FSM states
-  typedef enum logic [2:0] {
-      IDLE            = 3'b000,
-      IDLE_CHECK      = 3'b001,
-      GENERATE_MATRIX = 3'b010,
-      RANK_CHECK      = 3'b011,
-      DONE            = 3'b100
+  typedef enum logic [1:0] {
+      IDLE            = 2'b00,
+      GENERATE_MATRIX = 2'b01,
+      RANK_CHECK      = 2'b10,
+      DONE            = 2'b11
   } state_t;
   state_t fsm_current_state, fsm_next_state;
 
@@ -77,12 +76,6 @@ module matrix_generator (
       case (fsm_current_state)
           IDLE: begin
               if (start)
-                fsm_next_state = IDLE_CHECK;
-          end
-          IDLE_CHECK: begin
-              if (rd_PrePowHash == PrePowHash) // Cache hit
-                fsm_next_state = DONE;
-              else                             // Cache miss
                 fsm_next_state = GENERATE_MATRIX;
           end
           GENERATE_MATRIX: begin
@@ -101,7 +94,7 @@ module matrix_generator (
       endcase
   end
 
-  // FSM sequential logic
+  // FSM state dependent sequential logic
   always_ff @(posedge clk or posedge rst) begin
     if (rst) begin
         fsm_current_state <= IDLE;
@@ -113,12 +106,14 @@ module matrix_generator (
     end else begin
         fsm_current_state <= fsm_next_state;
         case (fsm_current_state)
-          IDLE_CHECK: begin
-            s0_reg <= PrePowHash[63:0];
-            s1_reg <= PrePowHash[127:64];
-            s2_reg <= PrePowHash[191:128];
-            s3_reg <= PrePowHash[255:192];
-            n16th_value <= 8'h0;
+          IDLE: begin
+            if (start) begin
+              n16th_value <= 8'h0;
+              s0_reg <= PrePowHash[63:0];
+              s1_reg <= PrePowHash[127:64];
+              s2_reg <= PrePowHash[191:128];
+              s3_reg <= PrePowHash[255:192];
+            end
           end
           GENERATE_MATRIX: begin
             s0_reg <= s0_next;

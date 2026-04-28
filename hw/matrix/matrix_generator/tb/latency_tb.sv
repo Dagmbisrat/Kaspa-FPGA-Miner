@@ -70,8 +70,8 @@ module latency_tb;
   logic [255:0] vectors [0:NUM_TESTS*65-1];
 
   // ── FSM state encoding (must match matrix_generator.sv) ─────────────────────
-  localparam FSM_GENERATE_MATRIX = 3'd2;
-  localparam FSM_RANK_CHECK      = 3'd3;
+  localparam FSM_GENERATE_MATRIX = 2'd1;
+  localparam FSM_RANK_CHECK      = 2'd2;
 
   // ── Statistics ───────────────────────────────────────────────────────────────
   integer total_cycles, gen_cycles, rank_cycles;
@@ -140,12 +140,13 @@ module latency_tb;
         continue;
       end
 
-      // gen_cycles > 256 means more than one GENERATE_MATRIX pass (regen)
-      if (gen_cycles > 256) regen_count++;
+      // gen_cycles > 257 means more than one GENERATE_MATRIX pass (regen)
+      // One clean pass = 257 cycles (1 IDLE→GEN transition + 256 GEN cycles)
+      if (gen_cycles > 257) regen_count++;
 
       $display("Test %0d  total=%4d  gen=%4d  rank=%4d%s",
                test_idx, total_cycles, gen_cycles, rank_cycles,
-               gen_cycles > 256 ? "  [REGEN]" : "");
+               gen_cycles > 257 ? "  [REGEN]" : "");
 
       if (total_cycles < min_total) min_total = total_cycles;
       if (total_cycles > max_total) max_total = total_cycles;
