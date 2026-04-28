@@ -1,0 +1,302 @@
+Cshake256 Steps
+    S values : 
+        "ProofOfWorkHash" →  50 72 6F 6F 66 4F 66 57 6F 72 6B 48 61 73 68 
+        "HeavyHash"       →  48 65 61 76 79 48 61 73 68
+
+    Input is:
+        80-byte when S is "ProofOfWorkHash"
+        32-byte when S is "HeavyHash"
+
+        
+    1. Encode the Header (cSHAKE prefix) (from LSB -> MSB)
+        \x01\x88                ← left_encode(136): "1 byte follows, value 0x88=136"
+        \x01\x00                ← encode_string(""): left_encode(0 bits)
+        \x01\x78 or \x01\x48    ← left_encode(120/72): "1 byte follows, value 0x78=120 or 0x48=72" 
+        [15 or 9 bytes of S]    ← the actual S content (LSB -> MSB)
+        [zero padding]          ← zeros to reach 136 bytes total
+
+        For S value of "ProofOfWorkHash" (15 bytes), the header is:
+        01 88 + 01 00 + 01 78 + 50 72 6F 6F 66 4F 66 57 6F 72 6B 48 61 73 68 + [115 zeros]
+        LE: 01880100017850726F6F664F66576F726B4861736800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+        For S value of "HeavyHash" (9 bytes), the header is:
+        01 88 + 01 00 + 01 48 + 48 65 61 76 79 48 61 73 68 + [121 zeros]
+        LE: 01880100014848656176794861736800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+        
+    2. Setup state and then absorb the Header
+        - State starts as all zeros (1600 bits)
+        - XOR the 136-byte header into the first 136 bytes of state
+            The 136 bytes are loaded as 17 consecutive 64-bit lanes (17 × 8 = 136 bytes):
+            bytes 0–7   → A[0][0]
+            bytes 8–15  → A[1][0]
+            bytes 16–23 → A[2][0]
+            ...
+            bytes 128–135 → A[2][2]
+        - Run Keccak-f[1600] (24 rounds)
+
+    3. Keccak-f[1600] (24 rounds) The Header 
+
+        - The state is a 5×5 grid of 64-bit lanes (5×5×64 = 1600 bits). 
+        - Each cell holds a 64-bit integer. The permutation runs 24 rounds, and each round applies 5 steps in order: θ, ρ, π, χ, ι
+        
+        1. θ (Theta) — Column parity mixing
+            For each column x (0..4):
+            C[x] = A[x][0] XOR A[x][1] XOR A[x][2] XOR A[x][3] XOR A[x][4]
+
+            For each column x:
+            D[x] = C[x-1] XOR ROT64(C[x+1], 1)
+
+            For each lane A[x][y]:
+            A[x][y] ^= D[x]
+        
+        2. ρ (Rho) — Lane rotations
+            - Each of the 25 lanes gets rotated by a fixed amount. A[0][0] is never rotated:
+            (x,y) → rotation offset
+            (1,0)→1   (2,0)→62  (3,0)→28  (4,0)→27
+            (0,1)→36  (1,1)→44  (2,1)→6   (3,1)→55  (4,1)→20
+            (0,2)→3   (1,2)→10  (2,2)→43  (3,2)→25  (4,2)→39
+            (0,3)→41  (1,3)→45  (2,3)→15  (3,3)→21  (4,3)→8
+            (0,4)→18  (1,4)→2   (2,4)→61  (3,4)→56  (4,4)→14
+            
+        3. π (Pi) — Lane permutation
+            - This shuffles which lane sits at which grid position. No bits are changed, just rearranged.
+            For all x, y:
+            B[y][2x + 3y mod 5] = A[x][y]
+
+        4. χ (Chi) — Non-linear mixing
+            - Each lane is XORed with a function of its two neighbors in the same row. The NOT+AND combo is what introduces non-linearity (similar in spirit to an S-box).
+            For each x, y:
+            A[x][y] = B[x][y] XOR ((NOT B[x+1][y]) AND B[x+2][y])
+        
+        5. ι (Iota) — Round constant injection
+            A[0][0] ^= RC[round]
+            
+            The 24 Round Constants (ι step uses these)
+            RC[0]  = 0x0000000000000001    RC[12] = 0x000000008000808B
+            RC[1]  = 0x0000000000008082    RC[13] = 0x800000000000008B
+            RC[2]  = 0x800000000000808A    RC[14] = 0x8000000000008089
+            RC[3]  = 0x8000000080008000    RC[15] = 0x8000000000008003
+            RC[4]  = 0x000000000000808B    RC[16] = 0x8000000000008002
+            RC[5]  = 0x0000000080000001    RC[17] = 0x8000000000000080
+            RC[6]  = 0x8000000080008081    RC[18] = 0x000000000000800A
+            RC[7]  = 0x8000000000008009    RC[19] = 0x800000008000000A
+            RC[8]  = 0x000000000000008A    RC[20] = 0x8000000080008081
+            RC[9]  = 0x0000000000000088    RC[21] = 0x8000000000008080
+            RC[10] = 0x0000000080008009    RC[22] = 0x0000000080000001
+            RC[11] = 0x000000008000000A    RC[23] = 0x8000000080008008
+
+    4. Encode the Msg.
+        - left_encode(640)  ||  [80 bytes msg]  ||  0x04  ||  [zeros]  ||  0x80
+            x02 + x0280 or 0x0100       ← left_encode(640): "2 byte follows, value 0x0280=640(80bytes) or 0x0100=256(32bytes)"
+            [80 or 32 bytes of msg]     ← your message, 80 bytes or 32 bytes
+            x04                         ← cSHAKE domain separator, 1 byte
+            [51 or 99 × \x00 ]          ← zero padding, 51 bytes (on an 80byte input) or 99 bytes (on an 32byte input) 
+            \x80                        ← final bit marker, 1 byte
+
+    5. Setup state and then absorb the Header
+        - State starts where Header permutation left it
+        - XOR the 136-byte header into the first 136 bytes of state
+            The 136 bytes are loaded as 17 consecutive 64-bit lanes (17 × 8 = 136 bytes):
+            bytes 0–7   → A[0][0]
+            bytes 8–15  → A[1][0]
+            bytes 16–23 → A[2][0]
+            ...
+            bytes 128–135 → A[2][2]
+        - Run Keccak-f[1600] (24 rounds)
+
+    6. Output 
+        - Read first 32 bytes  →  your 256-bit cSHAKE256 output
+
+
+========================================================================================================================================================================
+========================================================================================================================================================================
+
+Optamized Cshake256 core for Kheavyhash
+
+
+S values : 
+        "ProofOfWorkHash" →  50 72 6F 6F 66 4F 66 57 6F 72 6B 48 61 73 68 
+        "HeavyHash"       →  48 65 61 76 79 48 61 73 68
+
+    Input is:
+        80-byte when S is "ProofOfWorkHash"
+        32-byte when S is "HeavyHash"
+
+
+    SpongeState Constants
+        ProofOfWorkHash:
+                        x=0                x=1                x=2                x=3                x=4        
+            y=0   b08dee036fe1cdd5  833533355cc91b1f  8808752c531a506b  4670ce44b2606c77  039a6a5bae88e5ad
+            y=1   edb7cd4412115b98  cb86952ca553ad6a  488d68534b3d84ff  8a6531470cf6cebf  09acbd0b98e33f2c
+            y=2   e9fbf67c0a5d01bc  30f583bd38d2bed7  d18c0bf6288590ab  9704ebe8b6ecf519  16f6f9aad0cf8e7c
+            y=3   1643b28f559f8650  0488e01dde10bd17  3c20a7939bc9c51a  948d74ea54364de6  681f2c0817428514
+            y=4   addedab19c1e9c60  5013c7d572442445  9e5bfcc18274e2e3  5779ac19c74d66c0  851e49cfc7997a73
+
+
+        HeavyHash:
+                        x=0                x=1                x=2                x=3                x=4        
+            y=0   1e8357896603c46c  f45a9a0a20f85dfd  a0d4b7bbb21581ce  dfc8b7581c89ed05  526d742699e6426c
+            y=1   473d100eb0263063  085f315a4476a9a0  9293d1bb86123413  a81675ed0bf6929b  003849b026e0582b
+            y=2   660a8aaf532af32f  3996ac6c067589a2  cbb3b88519c0308e  b0cc3b0e1ecc7d73  6fc0c572a9710157
+            y=3   fa70d4a9cb9e4a1a  c88462ad7b5f93a9  49c385e6b62d7460  b4b2139c7d16f1bf  7a057b83d0befedf
+            y=4   b269a02fb7ef4570  12cc3c946368d4b8  8384630610f619c8  c727a285ee3646ec  70a6245ffa7125e2
+
+    1. Encode the Msg.
+        - left_encode(640)  ||  [80 bytes msg]  ||  0x04  ||  [zeros]  ||  0x80
+            x02 + x0280 or 0x0100       ← left_encode(640): "2 byte follows, value 0x0280=640(80bytes) or 0x0100=256(32bytes)"
+            [80 or 32 bytes of msg]     ← your message, 80 bytes or 32 bytes
+            x04                         ← cSHAKE domain separator, 1 byte
+            [51 or 99 × \x00 ]          ← zero padding, 51 bytes (on an 80byte input) or 99 bytes (on an 32byte input) 
+            \x80                        ← final bit marker, 1 byte
+
+    2. Setup state and then absorb the Header
+        - XOR the 136-byte header into the first 136 bytes of state
+            The 136 bytes are loaded as 17 consecutive 64-bit lanes (17 × 8 = 136 bytes):
+            bytes 0–7   → A[0][0]
+            bytes 8–15  → A[1][0]
+            bytes 16–23 → A[2][0]SpongeState
+            ...
+            bytes 128–135 → A[2][2]
+        - Run Keccak-f[1600] (24 rounds)
+    
+    3. Keccak-f[1600] (24 rounds) The Header 
+
+        - The state is a 5×5 grid of 64-bit lanes (5×5×64 = 1600 bits). 
+        - Each cell holds a 64-bit integer. The permutation runs 24 rounds, and each round applies 5 steps in order: θ, ρ, π, χ, ι
+        
+        1. θ (Theta) — Column parity mixing
+            For each column x (0..4):
+            C[x] = A[x][0] XOR A[x][1] XOR A[x][2] XOR A[x][3] XOR A[x][4]
+
+            For each column x:
+            D[x] = C[x-1] XOR ROT64(C[x+1], 1)
+
+            For each lane A[x][y]:
+            A[x][y] ^= D[x]
+        
+        2. ρ (Rho) — Lane rotations
+            - Each of the 25 lanes gets rotated by a fixed amount. A[0][0] is never rotated:
+            (x,y) → rotation offset
+            (1,0)→1   (2,0)→62  (3,0)→28  (4,0)→27
+            (0,1)→36  (1,1)→44  (2,1)→6   (3,1)→55  (4,1)→20
+            (0,2)→3   (1,2)→10  (2,2)→43  (3,2)→25  (4,2)→39
+            (0,3)→41  (1,3)→45  (2,3)→15  (3,3)→21  (4,3)→8
+            (0,4)→18  (1,4)→2   (2,4)→61  (3,4)→56  (4,4)→14
+            
+        3. π (Pi) — Lane permutation
+            - This shuffles which lane sits at which grid position. No bits are changed, just rearranged.
+            For all x, y:
+            B[y][2x + 3y mod 5] = A[x][y]
+
+        4. χ (Chi) — Non-linear mixing
+            - Each lane is XORed with a function of its two neighbors in the same row. The NOT+AND combo is what introduces non-linearity (similar in spirit to an S-box).
+            For each x, y:
+            A[x][y] = B[x][y] XOR ((NOT B[x+1][y]) AND B[x+2][y])
+        
+        5. ι (Iota) — Round constant injection
+            A[0][0] ^= RC[round]
+            
+            The 24 Round Constants (ι step uses these)
+            RC[0]  = 0x0000000000000001    RC[12] = 0x000000008000808B
+            RC[1]  = 0x0000000000008082    RC[13] = 0x800000000000008B
+            RC[2]  = 0x800000000000808A    RC[14] = 0x8000000000008089
+            RC[3]  = 0x8000000080008000    RC[15] = 0x8000000000008003
+            RC[4]  = 0x000000000000808B    RC[16] = 0x8000000000008002
+            RC[5]  = 0x0000000080000001    RC[17] = 0x8000000000000080
+            RC[6]  = 0x8000000080008081    RC[18] = 0x000000000000800A
+            RC[7]  = 0x8000000000008009    RC[19] = 0x800000008000000A
+            RC[8]  = 0x000000000000008A    RC[20] = 0x8000000080008081
+            RC[9]  = 0x0000000000000088    RC[21] = 0x8000000000008080
+            RC[10] = 0x0000000080008009    RC[22] = 0x0000000080000001
+            RC[11] = 0x000000008000000A    RC[23] = 0x8000000080008008
+
+    4. Output
+        - Read first 32 bytes  →  your 256-bit cSHAKE256 output
+
+        
+=========================================================================================================================================================================
+=======================================================================================================================================================================
+
+
+    1. Pipelined Architecture (1 Keccak round per stage)
+
+        Overview:
+            26 pipeline stages total. A new nonce enters every clock cycle.
+            After the 26-cycle fill latency, one hash result emerges per clock.
+
+        Stage layout:
+            Stage  0  [Encode Msg   ]  combinational → PR0  (1088-bit formatted block)
+            Stage  1  [XOR State    ]  XOR PR0 into SpongeState constant → PR1  (1600-bit state)
+            Stage  2  [Round  0     ]  keccak_round(PR1,  RC[0])  → PR2   (1600-bit state)
+            Stage  3  [Round  1     ]  keccak_round(PR2,  RC[1])  → PR3
+            Stage  4  [Round  2     ]  keccak_round(PR3,  RC[2])  → PR4
+            Stage  5  [Round  3     ]  keccak_round(PR4,  RC[3])  → PR5
+            Stage  6  [Round  4     ]  keccak_round(PR5,  RC[4])  → PR6
+            Stage  7  [Round  5     ]  keccak_round(PR6,  RC[5])  → PR7
+            Stage  8  [Round  6     ]  keccak_round(PR7,  RC[6])  → PR8
+            Stage  9  [Round  7     ]  keccak_round(PR8,  RC[7])  → PR9
+            Stage 10  [Round  8     ]  keccak_round(PR9,  RC[8])  → PR10
+            Stage 11  [Round  9     ]  keccak_round(PR10, RC[9])  → PR11
+            Stage 12  [Round 10     ]  keccak_round(PR11, RC[10]) → PR12
+            Stage 13  [Round 11     ]  keccak_round(PR12, RC[11]) → PR13
+            Stage 14  [Round 12     ]  keccak_round(PR13, RC[12]) → PR14
+            Stage 15  [Round 13     ]  keccak_round(PR14, RC[13]) → PR15
+            Stage 16  [Round 14     ]  keccak_round(PR15, RC[14]) → PR16
+            Stage 17  [Round 15     ]  keccak_round(PR16, RC[15]) → PR17
+            Stage 18  [Round 16     ]  keccak_round(PR17, RC[16]) → PR18
+            Stage 19  [Round 17     ]  keccak_round(PR18, RC[17]) → PR19
+            Stage 20  [Round 18     ]  keccak_round(PR19, RC[18]) → PR20
+            Stage 21  [Round 19     ]  keccak_round(PR20, RC[19]) → PR21
+            Stage 22  [Round 20     ]  keccak_round(PR21, RC[20]) → PR22
+            Stage 23  [Round 21     ]  keccak_round(PR22, RC[21]) → PR23
+            Stage 24  [Round 22     ]  keccak_round(PR23, RC[22]) → PR24
+            Stage 25  [Round 23     ]  keccak_round(PR24, RC[23]) → PR25  (1600-bit final state)
+            Stage 26  [Output       ]  hash_out = PR25[255:0]  (256-bit result)
+
+        Register widths:
+            PR0          : 1088 bits  (17 × 64-bit formatted message lanes)
+            PR1 – PR25   : 1600 bits  (25 × 64-bit Keccak state lanes)
+            Total FF cost: 1088 + (25 × 1600) = 41,088 flip-flops
+
+        How a nonce flows through (timing diagram, showing 4 consecutive nonces):
+
+            Cycle:  0    1    2    3    4    5   ...  25   26   27   28   29
+            -------+----+----+----+----+----+----+----+----+----+----+----+----
+            N0:    | S0 | S1 | S2 | S3 | S4 | S5 |...| S25| OUT|    |    |
+            N1:    |    | S0 | S1 | S2 | S3 | S4 |...| S24| S25| OUT|    |
+            N2:    |    |    | S0 | S1 | S2 | S3 |...| S23| S24| S25| OUT|
+            N3:    |    |    |    | S0 | S1 | S2 |...| S22| S23| S24| S25| OUT
+            -------+----+----+----+----+----+----+----+----+----+----+----+----
+
+            S0  = Encode Msg stage         (formats the 136-byte block)
+            S1  = XOR SpongeState stage    (loads pre-computed constant, XORs block in)
+            S2–S25 = Keccak rounds 0–23   (each round permutes the full 1600-bit state)
+            OUT = hash_out valid
+
+        What "the state" looks like at each register:
+
+            After PR0  (1088 bits):
+                [0x02][0x02][0x80 or 0x01][0x00] | [msg bytes 0–79 or 0–31] |
+                [0x04] | [51 or 99 zero bytes] | [0x80]
+
+            After PR1  (1600 bits), shown as 5×5 lane grid (x=col, y=row):
+                Lanes 0–16 = SpongeState[x][y] XOR formatted_block_lane[i]
+                Lanes 17–24 = SpongeState[x][y]  (rate does not reach these)
+
+                Example for ProofOfWorkHash with nonce N0 (lane values are illustrative):
+                        x=0              x=1              x=2              x=3              x=4
+                y=0  b08dee03^blk[0]  833533^blk[1]   8808752^blk[2]   4670ce^blk[3]   039a6a^blk[4]
+                y=1  edb7cd44^blk[5]  cb8695^blk[6]   488d68^blk[7]   8a6531^blk[8]   09acbd^blk[9]
+                y=2  e9fbf67^blk[10]  30f583^blk[11]  d18c0b^blk[12]  9704eb^blk[13]  16f6f9^blk[14]
+                y=3  1643b2^blk[15]   0488e0^blk[16]  3c20a7(no XOR)  948d74(no XOR)  681f2c(no XOR)
+                y=4  addeda(no XOR)   5013c7(no XOR)  9e5bfc(no XOR)  5779ac(no XOR)  851e49(no XOR)
+
+            After PR2–PR25 (1600 bits each):
+                The full 5×5 lane grid after each successive Keccak round.
+                Every bit in all 25 lanes is live — the permutation mixes the entire state.
+                No lane is "special" after round 0; diffusion is complete within a few rounds.
+
+            After stage 26 (256 bits):
+                hash_out = PR25[255:0]
+                         = lanes A[0][0] (bits 63:0) and A[1][0] (bits 127:64)
+                           and A[2][0] (bits 191:128) and A[3][0] (bits 255:192)
+                         = first 4 lanes of the final state, read as little-endian bytes

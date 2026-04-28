@@ -9,10 +9,9 @@
 //   2. HeavyHash correctness — 8 inputs sent back-to-back (s_value=1 constant
 //                  throughout), 8 outputs compared to Python reference.
 //
-//   3. Throughput benchmark (opt-in: +bench)
-//        Sends +bench_iters= inputs (default 500) back-to-back.
-//        Reports hashes/cycle and MH/s at +clk_mhz= (default 500).
-//        VCD recording is paused during this phase to keep file size small.
+//   3. ProofOfWorkHash correctness — 8 inputs (s_value=0), compared to reference.
+//
+// For throughput benchmarking use: make throughput
 //
 
 module cshake256_tb;
@@ -59,8 +58,6 @@ logic [255:0] exp_hash [0 : NUM_TESTS - 1];  // pre-filled by send_batch
 integer pass_count  = 0;
 integer fail_count  = 0;
 integer lat_cycles;
-integer bench_iters = 500;
-integer clk_mhz     = 500;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // send_batch
@@ -123,10 +120,6 @@ initial begin
     $dumpvars(0, cshake256_tb);
     $readmemh("sim/expected_vectors.mem", vectors);
 
-    // Read optional plusargs
-    void'($value$plusargs("bench_iters=%d", bench_iters));
-    void'($value$plusargs("clk_mhz=%d",     clk_mhz));
-
     // Initialise
     clk = 0; rst = 1; valid_in = 0;
     data_in = '0; data_80byte = 0; s_value = 0;
@@ -175,53 +168,6 @@ initial begin
              NUM_POW_TESTS);
     send_batch(NUM_HH_TESTS, NUM_POW_TESTS);
     collect_batch(NUM_POW_TESTS, "ProofOfWorkHash");
-
-    // ── Phase 4: Throughput benchmark (opt-in: +bench) ───────────────────────
-    if ($test$plusargs("bench")) begin : bench_block  // Phase 4
-        realtime t_start, t_end;
-        int      k, total_cycles;
-        real     throughput;
-
-        $display("");
-        $display("=== Phase 5: Throughput Benchmark ===");
-        $display("  Inputs     : %0d back-to-back", bench_iters);
-        $display("  Mode       : HeavyHash (s_value=1)");
-        $display("  Assumed clk: %0d MHz", clk_mhz);
-        $dumpoff; // pause VCD — bench trace would be enormous
-
-        s_value = 1; data_80byte = 0;
-
-        // First input: capture t_start at the sampling edge
-        data_in[63:0] = 64'h0;
-        #1 valid_in = 1;
-        @(posedge clk);
-        t_start = $realtime;  // time of first valid_in sampling edge
-
-        // Remaining bench_iters-1 inputs (valid_in stays 1)
-        for (k = 1; k < bench_iters; k++) begin
-            data_in[63:0] = 64'(k); // vary data each cycle
-            @(posedge clk);
-        end
-        #1 valid_in = 0;
-        data_in = '0;
-
-        // Collect all bench_iters outputs and record time of the last one
-        wait (valid_out === 1'b1);                    // first output
-        for (k = 1; k < bench_iters; k++) @(posedge clk); // remaining outputs
-        t_end = $realtime;  // time of last valid_out sampling edge
-
-        // Elapsed = PIPE_DEPTH + bench_iters - 1 cycles
-        total_cycles = int'((t_end - t_start) / real'(CLK_PERIOD_NS));
-        throughput   = real'(bench_iters) / real'(total_cycles);
-
-        $display("  Total cycles: %0d  (fill=%0d + burst=%0d)",
-                 total_cycles, PIPE_DEPTH, bench_iters - 1);
-        $display("  Throughput  : %.4f hashes/cycle", throughput);
-        $display("  At %0d MHz  : %.2f MH/s", clk_mhz, throughput * real'(clk_mhz));
-        $display("  Steady-state: 1.0000 hashes/cycle = %0d.00 MH/s (fill amortised)",
-                 clk_mhz);
-        $dumpon;
-    end
 
     // ── Summary ───────────────────────────────────────────────────────────────
     $display("");
