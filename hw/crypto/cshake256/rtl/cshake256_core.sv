@@ -1,4 +1,6 @@
-module cshake256_pipelined_core (
+module cshake256_pipelined_core #(
+    parameter int NUM_STAGES = 4  // keccak_round instances per iteration; must divide 24
+) (
     input  logic          clk,
     input  logic          rst,
 
@@ -16,15 +18,42 @@ module cshake256_pipelined_core (
 localparam int RATE_BITS  = 1088;  // 136 bytes
 localparam int STATE_BITS = 1600;  // 25 x 64-bit lanes
 localparam int NUM_ROUNDS = 24;
+localparam int ITERS      = NUM_ROUNDS / NUM_STAGES;
+// Minimum 1 bit so the counter declaration is always legal (handles ITERS==1)
+localparam int ITER_BITS  = (ITERS > 1) ? $clog2(ITERS) : 1;
+
+initial begin
+    assert (NUM_ROUNDS % NUM_STAGES == 0)
+        else $fatal(1, "NUM_STAGES (%0d) must divide NUM_ROUNDS (24)", NUM_STAGES);
+end
 
 
 // Pipeline registers
-logic [RATE_BITS-1:0]  pr0;           // After stage 0: encoded message block
-logic [STATE_BITS-1:0] pr [1:25];     // After stage 1 (XOR) through stage 25 (Round 23)
+logic [RATE_BITS-1:0]  pr0;  // Stage 0: encoded message block
+logic [STATE_BITS-1:0] pr1;  // Stage 1: after XOR into sponge state
 
-// Valid shift register — 26 bits so valid_sr[25] asserts on the same edge
-// that pr[25] is written (cycle 26), matching the Notes.txt timing diagram.
-logic [25:0] valid_sr;
+// Valid shift register — 2+ITERS bits.
+// Bit 0: stage 0 done.  Bit 1: stage 1 done (pr1 valid).
+// Bits 2..1+ITERS: one bit per keccak iteration.  Bit 1+ITERS: output valid.
+logic [1+ITERS:0] valid_sr;
+
+// Folded keccak state
+logic [STATE_BITS-1:0]  fold_state;
+logic [ITER_BITS-1:0]   iter;
+logic                   keccak_active;
+
+
+// Round constants
+localparam logic [63:0] RC [0:23] = '{
+    64'h0000000000000001, 64'h0000000000008082, 64'h800000000000808A,
+    64'h8000000080008000, 64'h000000000000808B, 64'h0000000080000001,
+    64'h8000000080008081, 64'h8000000000008009, 64'h000000000000008A,
+    64'h0000000000000088, 64'h0000000080008009, 64'h000000008000000A,
+    64'h000000008000808B, 64'h800000000000008B, 64'h8000000000008089,
+    64'h8000000000008003, 64'h8000000000008002, 64'h8000000000000080,
+    64'h000000000000800A, 64'h800000008000000A, 64'h8000000080008081,
+    64'h8000000000008080, 64'h0000000080000001, 64'h8000000080008008
+};
 
 
 // ********************** Stage 0 : Encode Msg  ****************************
@@ -57,18 +86,15 @@ end
 
 always_ff @(posedge clk) begin
     pr0      <= stage0_comb;
-    valid_sr <= {valid_sr[24:0], valid_in};
+    valid_sr <= {valid_sr[ITERS:0], valid_in};
 end
 // -------------------------------------------------------------------------
 
 
 // ********************** Stage 1 : XOR into SpongeState  ******************
 // -------------------------------------------------------------------------
-logic [STATE_BITS-1:0] stage1_comb;
-
 // Pre-computed SpongeState constants (post-header Keccak-f output)
 // Lane ordering: lane_idx = x + 5*y  (matches absorb module convention)
-// Keccak-f[1600] output state — paste into .sv
 logic [63:0] SPONGE_POW [0:24];
 initial begin
     SPONGE_POW[ 0] = 64'h113cff0da1f6d83d;  // A[0][0]
@@ -98,7 +124,6 @@ initial begin
     SPONGE_POW[24] = 64'h02b97c786f824383;  // A[4][4]
 end
 
-// Keccak-f[1600] output state — paste into .sv
 logic [63:0] SPONGE_HH [0:24];
 initial begin
     SPONGE_HH[ 0] = 64'h3ad74c52b2248509;  // A[0][0]
@@ -128,77 +153,99 @@ initial begin
     SPONGE_HH[24] = 64'h1619327d10b9da35;  // A[4][4]
 end
 
+logic [STATE_BITS-1:0] stage1_comb;
+
 always_comb begin
     // Lanes 0-16 (rate): XOR formatted block lanes into SpongeState constant
     for (int i = 0; i < 17; i++)
         stage1_comb[i*64 +: 64] = (s_value ? SPONGE_HH[i] : SPONGE_POW[i]) ^ pr0[i*64 +: 64];
 
-    // Lanes 17-24 (capacity): pass through constant unchanged, input never reaches here
+    // Lanes 17-24 (capacity): pass through constant unchanged
     for (int i = 17; i < 25; i++)
         stage1_comb[i*64 +: 64] = s_value ? SPONGE_HH[i] : SPONGE_POW[i];
 end
 
 always_ff @(posedge clk)
-    pr[1] <= stage1_comb;
+    pr1 <= stage1_comb;
 // -------------------------------------------------------------------------
 
 
-// ********************** Stages 2-25 : Keccak Rounds 0-23 ****************
+// ********************** Folded Keccak : NUM_STAGES instances, ITERS passes
 // -------------------------------------------------------------------------
-// Each iteration of the generate loop is one pipeline stage:
-//   - Unpacks the flat 1600-bit pr[r+1] into a 5x5 lane array  (lane = x + 5*y)
-//   - Feeds it into a keccak_round instance with its hardcoded RC
-//   - Packs the result back into flat pr[r+2] on the clock edge
+// Timing overview (valid_in asserts before edge T):
+//   Edge T        : pr0 captured,  valid_sr[0] set, iter reset to 0
+//   Edge T+1      : pr1 captured,  valid_sr[1] set, keccak_active set
+//   Edge T+2      : fold_state <- rounds 0..NUM_STAGES-1 on pr1, valid_sr[2] set
+//   Edge T+2+k    : fold_state <- rounds k*NUM_STAGES..(k+1)*NUM_STAGES-1
+//   Edge T+1+ITERS: fold_state <- final round group, valid_sr[1+ITERS]=valid_out
+//
+// Constraint: assert valid_in at most once every 2+ITERS cycles.
 // -------------------------------------------------------------------------
 
-localparam logic [63:0] RC [0:23] = '{
-    64'h0000000000000001, 64'h0000000000008082, 64'h800000000000808A,
-    64'h8000000080008000, 64'h000000000000808B, 64'h0000000080000001,
-    64'h8000000080008081, 64'h8000000000008009, 64'h000000000000008A,
-    64'h0000000000000088, 64'h0000000080008009, 64'h000000008000000A,
-    64'h000000008000808B, 64'h800000000000008B, 64'h8000000000008089,
-    64'h8000000000008003, 64'h8000000000008002, 64'h8000000000000080,
-    64'h000000000000800A, 64'h800000008000000A, 64'h8000000080008081,
-    64'h8000000000008080, 64'h0000000080000001, 64'h8000000080008008
-};
-
-genvar r;
-generate
-    for (r = 0; r < NUM_ROUNDS; r++) begin : g_round
-
-        // Unpack flat pr[r+1] → 5x5 lane array for keccak_round input
-        logic [63:0] round_in  [0:4][0:4];
-        logic [63:0] round_out [0:4][0:4];
-
-        always_comb begin
-            for (int x = 0; x < 5; x++)
-                for (int y = 0; y < 5; y++)
-                    round_in[x][y] = pr[r+1][(x + 5*y)*64 +: 64];
+// Iteration counter control.
+// Triggered by valid_sr[0] so iter=0 lands one cycle before fold_state
+// first captures, keeping it aligned with pr1 availability and the mux below.
+always_ff @(posedge clk) begin
+    if (rst) begin
+        iter          <= '0;
+        keccak_active <= 1'b0;
+    end else if (valid_sr[0]) begin          // stage 0 just fired → pr1 captured next edge
+        iter          <= '0;
+        keccak_active <= 1'b1;
+    end else if (keccak_active) begin
+        if (iter == ITER_BITS'(ITERS - 1)) begin
+            keccak_active <= 1'b0;
+            iter          <= '0;
+        end else begin
+            iter <= iter + 1'b1;
         end
+    end
+end
+
+// Chain of NUM_STAGES purely-combinational keccak_round instances.
+// chain[0] is the chain input; chain[NUM_STAGES] is the chain output.
+logic [63:0] chain [0:NUM_STAGES][0:4][0:4];
+
+// Iteration 0: feed pr1 (just registered by stage 1).
+// Iterations 1..ITERS-1: feed the previous fold_state.
+// valid_sr[1] is exactly 1 during the combinational window of iteration 0.
+always_comb begin
+    for (int x = 0; x < 5; x++)
+        for (int y = 0; y < 5; y++)
+            chain[0][x][y] = valid_sr[1]
+                ? pr1[(x + 5*y)*64 +: 64]
+                : fold_state[(x + 5*y)*64 +: 64];
+end
+
+genvar s;
+generate
+    for (s = 0; s < NUM_STAGES; s++) begin : g_fold
+        // Round index for instance s in iteration iter:
+        //   iter * NUM_STAGES + s  (always in 0..23)
+        wire [4:0] rc_idx;
+        assign rc_idx = 5'(iter) * 5'(NUM_STAGES) + 5'(s);
 
         keccak_round u_round (
-            .state          (round_in),
-            .round_constant (RC[r]),
-            .out            (round_out)
+            .state          (chain[s]),
+            .round_constant (RC[rc_idx]),
+            .out            (chain[s+1])
         );
-
-        // Pack keccak_round output → flat pr[r+2] on clock edge
-        always_ff @(posedge clk) begin
-            for (int x = 0; x < 5; x++)
-                for (int y = 0; y < 5; y++)
-                    pr[r+2][(x + 5*y)*64 +: 64] <= round_out[x][y];
-        end
-
     end
 endgenerate
+
+// Register chain output every cycle; only meaningful when keccak_active.
+always_ff @(posedge clk) begin
+    for (int x = 0; x < 5; x++)
+        for (int y = 0; y < 5; y++)
+            fold_state[(x + 5*y)*64 +: 64] <= chain[NUM_STAGES][x][y];
+end
 // -------------------------------------------------------------------------
 
 
-// ********************** Stage 26 : Output ********************************
+// ********************** Output *******************************************
 // -------------------------------------------------------------------------
-// pr[25] is already a register just wire the first 256 bits out
-assign hash_out  = pr[25][255:0];
-assign valid_out = valid_sr[25];
+assign hash_out  = fold_state[255:0];
+assign valid_out = valid_sr[1 + ITERS];
 // -------------------------------------------------------------------------
 
 endmodule
