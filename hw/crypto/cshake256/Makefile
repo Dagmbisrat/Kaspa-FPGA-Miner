@@ -18,14 +18,20 @@ NUM_STAGES ?= 24
 .PHONY: all runtest throughput wave vectors clean help
 
 help:
-	@echo "Usage:"
-	@echo "  make runtest              - Generate vectors, compile, run correctness + latency"
-	@echo "  make throughput           - Throughput sweep across 7 batch sizes"
-	@echo "  make throughput CLK_MHZ=N - Throughput sweep at N MHz (default 500)"
-	@echo "  make runtest NUM_STAGES=N - Build DUT with N Keccak pipeline layers (must divide 24; default 24)"
-	@echo "  make wave                 - Run and open waveform in GTKWave"
-	@echo "  make vectors              - Regenerate test vectors from Python reference"
-	@echo "  make clean                - Remove generated files"
+	@echo "Targets:"
+	@echo "  make runtest     - Generate vectors, build, run correctness + latency"
+	@echo "  make throughput  - Build + run the throughput / timing benchmark"
+	@echo "  make wave        - Run correctness TB and open the waveform in GTKWave"
+	@echo "  make vectors     - Regenerate test vectors from the Python reference"
+	@echo "  make clean       - Remove build dirs, waveforms, and vectors"
+	@echo ""
+	@echo "Variables (make TARGET VAR=value):"
+	@echo "  NUM_STAGES=$(NUM_STAGES)  - Keccak pipeline layers; must divide 24 (1,2,3,4,6,8,12,24)"
+	@echo "                  sets ROUNDS_PER_STAGE = 24/NUM_STAGES = critical-path / Fmax knob"
+	@echo "  CLK_MHZ=$(CLK_MHZ)    - Assumed clock for the throughput MH/s column"
+	@echo "  JOBS=$(JOBS)        - Parallel Verilator / C++ build jobs"
+	@echo ""
+	@echo "throughput plusargs (CLK_MHZ wired automatically): +clk_mhz=N  +s_value=0|1"
 
 vectors:
 	python3 sim/gen_vectors.py

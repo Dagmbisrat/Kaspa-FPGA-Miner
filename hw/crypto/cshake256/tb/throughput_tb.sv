@@ -23,7 +23,8 @@ module throughput_tb;
   // ── Parameters ───────────────────────────────────────────────────────────────
   parameter int NUM_STAGES    = 24;   // override with -GNUM_STAGES=<n>
   parameter int CLK_PERIOD_NS = 10;
-  localparam int LATENCY      = NUM_STAGES + 2;
+  localparam int LATENCY          = NUM_STAGES + 2;
+  localparam int ROUNDS_PER_STAGE = 24 / NUM_STAGES;  // critical-path depth (Fmax proxy)
 
   // Batch sizes to sweep (number of back-to-back hashes per run)
   localparam int NUM_BATCHES = 7;
@@ -87,6 +88,7 @@ module throughput_tb;
              s_val ? "HeavyHash" : "ProofOfWorkHash", s_val[0]);
     $display("  Clock    : %0d MHz (assumed for MH/s)", clk_mhz);
     $display("  Pipeline : NUM_STAGES=%0d  (fill latency %0d cycles)", NUM_STAGES, LATENCY);
+    $display("  Timing   : %0d Keccak round(s)/stage on the critical path (Fmax knob)", ROUNDS_PER_STAGE);
     $display("───────────────────────────────────────────────────────────────");
     $display("  %8s  %8s  %12s  %10s", "Batch", "Cycles", "H/cycle", "MH/s");
     $display("───────────────────────────────────────────────────────────────");
@@ -142,9 +144,11 @@ module throughput_tb;
              max_tp, max_tp * real'(clk_mhz));
     $display("  Avg throughput : %.6f H/cycle  (%.2f MH/s)",
              sum_tp / real'(NUM_BATCHES), sum_tp / real'(NUM_BATCHES) * real'(clk_mhz));
-    $display("  Ideal (pipelined): %.6f H/cycle  (%.2f MH/s)",
-             1.0, real'(clk_mhz));
-    $display("  Fill latency     : %0d cycles  (NUM_STAGES + 2)", LATENCY);
+    $display("  Throughput is design-fixed at 1.000000 H/cycle (feed-forward);");
+    $display("  the batch numbers above only show fill-overhead approaching that.");
+    $display("  Fill latency  : %0d cycles  (NUM_STAGES + 2)", LATENCY);
+    $display("  Timing lever  : critical path = %0d Keccak round(s)/stage", ROUNDS_PER_STAGE);
+    $display("  Real MH/s     = Fmax(NUM_STAGES) x 1 H/cycle  ->  measure Fmax via synthesis");
     $display("═══════════════════════════════════════════════════════════════");
 
     $finish;
