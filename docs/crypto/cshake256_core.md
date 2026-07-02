@@ -1,157 +1,158 @@
-# cSHAKE256 Core — RTL Implementation
+# cSHAKE256 Pipelined Core — RTL Implementation
 
 ---
 
 ## Overview
 
-`cshake256_core` is a **Kaspa-specific** cSHAKE256 hash engine. It hardcodes the two
-customization strings used by kHeavyHash (`"ProofOfWorkHash"` and `"HeavyHash"`) and
-fixes the output length at 256 bits, eliminating general-purpose encoding logic and
-reducing the design to a compact two-absorb FSM.
+`cshake256_pipelined_core` is a **Kaspa-specific** cSHAKE256 hash engine built as
+a **feed-forward pipeline**: it accepts a new input every clock cycle and, after
+a fixed fill latency, emits one 256-bit hash every clock cycle (throughput = 1
+hash/cycle).
 
-> **Why not a general cSHAKE256?**
-> The full spec supports variable N, S, output length, and multi-block absorb/squeeze.
-> Kaspa only ever uses two fixed configurations — so the entire spec collapses to a
-> fixed two-pass pipeline with a single-bit selector.
+It hardcodes the two customization strings used by kHeavyHash
+(`"ProofOfWorkHash"` and `"HeavyHash"`) and fixes the output at 256 bits, so all
+general-purpose cSHAKE encoding collapses to a fixed datapath with a single-bit
+selector.
+
+> **Two key simplifications make the streaming pipeline possible**
+> 1. The cSHAKE **prefix block** (`bytepad(encode_string("") || encode_string(S), 136)`)
+>    is constant for each `S`. Absorbing it is done **offline**, and the resulting
+>    post-prefix Keccak state is hardcoded as a constant (`SPONGE_POW` / `SPONGE_HH`).
+> 2. Every hash therefore needs only **one** Keccak-f[1600]: XOR the message block
+>    into the precomputed sponge state, permute once, read the first 256 bits.
 
 ### Kaspa-Specific Shortcuts
 
-| General cSHAKE256      | Kaspa Miner           | Simplification                              |
-| ---------------------- | --------------------- | ------------------------------------------- |
-| Variable **N** string  | N = `""` always       | `encode_string(N)` becomes constant `01 00` |
-| Variable **S** string  | S = one of two values | 1-bit MUX between two `localparam`s         |
-| Variable output length | Always 256 bits       | No squeeze loop — read first 4 lanes        |
-| Multi-block input      | 80B or 32B input      | Single absorb block, muxed pad offset       |
+| General cSHAKE256      | Kaspa Miner           | Simplification                        |
+| ---------------------- | --------------------- | ------------------------------------- |
+| Variable **N** string  | N = `""` always       | folded into the constant sponge state |
+| Variable **S** string  | S = one of two values | 1-bit MUX between two sponge constants |
+| Variable output length | Always 256 bits       | No squeeze loop — read first 4 lanes  |
+| Multi-block input      | 80B or 32B input      | Single message block, muxed pad offset |
+| Prefix absorb (block 1)| Constant per S        | Precomputed → `SPONGE_POW`/`SPONGE_HH` |
 
 ---
 
-## Module Structure
+## Ports & Parameter
 
-### `cshake256_core` — Top-Level Controller
+### Parameter
 
-Orchestrates prefix encoding and data absorption through two calls to the absorb sub-module.
+| Parameter     | Default | Description                                                        |
+|:------------- |:-------:|:----------------------------------------------------------------- |
+| `NUM_STAGES`  | 24      | Keccak pipeline register layers. **Must divide 24.** Fmax-vs-area knob. |
+
+### Ports
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  cshake256_core                                         │
+│  cshake256_pipelined_core #(NUM_STAGES)                  │
 │                                                         │
-│   Inputs             Outputs                            │
-│   ───────            ────────                           │
-│   clk          ───►  hash_out [255:0]                   │
-│   rst          ───►  done                               │
-│   start                                                 │
-│   data_in [639:0]                                       │
-│   data_80byte                                           │
-│   s_value                                               │
+│   clk         ───►                 ───► hash_out [255:0] │
+│   rst         ───►                 ───► valid_out        │
+│   data_in [639:0] ───►                                  │
+│   data_80byte ───►                                      │
+│   s_value     ───►                                      │
+│   valid_in    ───►                                      │
 └─────────────────────────────────────────────────────────┘
 ```
 
-| Port          | Dir | Width | Description                                         |
-|:------------- |:---:|:-----:|:--------------------------------------------------- |
-| `clk`         | in  | 1     | Clock                                               |
-| `rst`         | in  | 1     | Async reset                                         |
-| `start`       | in  | 1     | Begin hashing                                       |
-| `data_in`     | in  | 640   | Input data (80B header or 32B digest, zero-padded)  |
-| `data_80byte` | in  | 1     | **0** = 32-byte input, **1** = 80-byte input        |
-| `s_value`     | in  | 1     | **0** = `"ProofOfWorkHash"` , **1** = `"HeavyHash"` |
-| `hash_out`    | out | 256   | cSHAKE256 result                                    |
-| `done`        | out | 1     | High for one cycle when hash is ready               |
+| Port          | Dir | Width | Description                                              |
+|:------------- |:---:|:-----:|:------------------------------------------------------- |
+| `clk`         | in  | 1     | Clock                                                    |
+| `rst`         | in  | 1     | Synchronous reset — clears `valid_sr` (no false outputs) |
+| `data_in`     | in  | 640   | Input message (80B header or 32B digest, zero-padded)    |
+| `data_80byte` | in  | 1     | **0** = 32-byte input, **1** = 80-byte input             |
+| `s_value`     | in  | 1     | **0** = `"ProofOfWorkHash"`, **1** = `"HeavyHash"`        |
+| `valid_in`    | in  | 1     | Assert to inject a new message on this cycle             |
+| `hash_out`    | out | 256   | cSHAKE256 result                                         |
+| `valid_out`   | out | 1     | High on the cycle `hash_out` is valid                    |
 
-### `cshake256_absorb` — Absorb Sub-Module
-
-XORs a 1088-bit block into the rate portion of the Keccak state (17 lanes),
-then runs one full Keccak-f[1600] permutation (~27 cycles per call).
-
-See [cshake256_absorb](cshake256_absorb.md) for full design details.
+> There is **no** `start`/`done` handshake. Drive `valid_in` every cycle for full
+> throughput; `valid_out` tracks each result `NUM_STAGES + 2` cycles later.
 
 ---
 
-## State Diagram
+## Pipeline Architecture
+
+The datapath is a straight feed-forward pipeline — no feedback, no FSM:
 
 ```
-          ┌───────────────────────────────────────────────────────┐
-          │                     start = 1                         │
-          │                                                       │
-          ▼                                                       │
-   ╔═════════════╗         ╔═════════════╗                        │
-   ║             ║         ║             ║                        │
-   ║    INIT     ║────────►║   ENCODE    ║                        │
-   ║   (001)     ║ 1 cyc   ║  PREFIX     ║                        │
-   ║             ║         ║   (010)     ║                        │
-   ╚═════════════╝         ╚══════╤══════╝                        │
-                                  │                               │
-                       Zero       │  absorb_done = 1              │
-                       state,     │  (~27 cycles)                 │
-                       reset      │                               │
-                       absorber   ▼                               │
-                           ╔═════════════╗                        │
-                           ║             ║                        │
-                           ║   ABSORB    ║                        │
-                           ║   INPUT     ║                        │
-                           ║   (011)     ║                        │
-                           ║             ║                        │
-                           ╚══════╤══════╝                        │
-                                  │                               │
-                                  │  absorb_done = 1              │
-                                  │  (~27 cycles)                 │
-                                  ▼                               │
-   ╔═════════════╗         ╔═════════════╗                        │
-   ║             ║◄────────║             ║                        │
-   ║    IDLE     ║ 1 cyc   ║    DONE     ║                        │
-   ║   (000)     ║         ║   (100)     ║────────────────────────┘
-   ║             ║         ║             ║
-   ╚═════════════╝         ╚═════════════╝
-                            latch hash_out
+              stage 0            stage 1                 NUM_STAGES Keccak layers
+          ┌───────────┐     ┌───────────────┐     ┌────────────────────────────────┐
+ data_in─►│ Encode Msg│─pr0►│ XOR into      │─pr1►│ [R rounds]─►reg ... [R rounds]─►reg├─► hash_out
+ valid_in ┊(comb)     ┊     ┊ SpongeState   ┊     ┊  kstate[0]        kstate[N-1]     ┊   valid_out
+          └───────────┘     └───────────────┘     └────────────────────────────────┘
+                              ▲ SPONGE_POW / SPONGE_HH        R = ROUNDS_PER_STAGE = 24/NUM_STAGES
 ```
 
-### Cycle Budget
+| Stage        | Register  | Function                                                        |
+|:------------ |:--------- |:-------------------------------------------------------------- |
+| 0 Encode     | `pr0` (1088b) | Build the padded 136-byte message block (combinational)     |
+| 1 XOR Sponge | `pr1` (1600b) | XOR `pr0` into the precomputed sponge constant (`s_value` MUX) |
+| Keccak ×N    | `kstate[0..N-1]` (1600b each) | Each layer runs `ROUNDS_PER_STAGE` rounds then registers |
+| Output       | —         | `hash_out = kstate[NUM_STAGES-1][255:0]` (combinational)        |
 
-```
-  Phase            Cycles     What Happens
-  ─────────────    ──────     ─────────────────────────────────────
-  INIT                 1      Zero state, reset absorber
-  ENCODE_PREFIX      ~27      Build prefix block ──► XOR + Keccak-f
-  ABSORB_INPUT       ~27      Pack data block   ──► XOR + Keccak-f
-  DONE                 1      Latch hash_out[255:0]
-  ─────────────    ──────
-  Total              ~56      Two full permutations + overhead
-```
+The `NUM_STAGES` layers hold `NUM_STAGES × ROUNDS_PER_STAGE = 24` `keccak_round`
+instances total, with **static** round constants (`GLOBAL_R = st*ROUNDS_PER_STAGE + r`,
+sweeping `RC[0..23]`).
+
+### Throughput, Latency & the NUM_STAGES Knob
+
+- **Throughput:** always **1 hash/cycle** — a new `valid_in` may be asserted every
+  cycle; `NUM_STAGES` does **not** change throughput.
+- **Fill latency:** `NUM_STAGES + 2` cycles (encode + XOR sponge + `NUM_STAGES` layers).
+- **Critical path (Fmax):** `ROUNDS_PER_STAGE = 24/NUM_STAGES` Keccak rounds.
+
+| `NUM_STAGES` | rounds/stage | Throughput | Critical path | 1600-bit regs |
+|:------------:|:------------:|:----------:|:-------------:|:-------------:|
+| 24           | 1            | 1 hash/cyc | 1 round (highest Fmax) | 24 + `pr1`   |
+| 12           | 2            | 1 hash/cyc | 2 rounds      | 12 + `pr1`    |
+| 8            | 3            | 1 hash/cyc | 3 rounds      | 8 + `pr1`     |
+| 1            | 24           | 1 hash/cyc | 24 rounds (lowest Fmax) | 1 + `pr1`   |
+
+> `NUM_STAGES` trades **Fmax for register area**; the Keccak *logic* is always the
+> full 24 rounds. Default `NUM_STAGES = 24` maximizes Fmax; lower it only to shrink
+> registers and pack more cores.
+
+### valid_out Alignment
+
+`valid_in` is delayed through `valid_sr` and tapped at `valid_sr[LAT-2]`
+(`LAT = NUM_STAGES + 2`) so `valid_out` lines up **exactly** with `hash_out`.
+`valid_sr` is the only register cleared by `rst`, which guarantees no spurious
+`valid_out` during the initial fill even though the datapath registers power up
+undefined.
 
 ---
 
 ## Kaspa-Specific Encoding
 
-### The General Formula
+### Prefix Block (precomputed → sponge constants)
 
-In the full cSHAKE256 spec, a prefix block is built as:
+In full cSHAKE256 the first rate block is:
 
 ```
 bytepad( encode_string(N) || encode_string(S) , 136 )
 ```
 
-### What Kaspa Hardcodes
-
-Since N is always empty and S is one of two constants, the core builds the entire
-prefix **combinationally** in `ENCODE_PREFIX` — no runtime encoding needed:
+Since `N = ""` and `S` is one of two constants, this block is fixed. It is absorbed
+**offline** (XOR into the zero state + one Keccak-f[1600]) and the resulting state is
+hardcoded:
 
 ```
  Byte     Hex        Meaning
  ─────────────────────────────────────────────────────────────────
   [0]     01         left_encode(136) ── length-of-length = 1
   [1]     88         left_encode(136) ── value = 136 (0x88)
-  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
   [2]     01         encode_string("") ── left_encode(0) len = 1
   [3]     00         encode_string("") ── left_encode(0) val = 0
-  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
   [4]     01         encode_string(S) ── left_encode(bit_len) len
-  [5]     78 / 48    S bit-length: 120 or 72
+  [5]     78 / 48    S bit-length: 120 ("ProofOfWorkHash") or 72 ("HeavyHash")
   [6+]    ...        S string bytes (little-endian ASCII)
-  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-  [rest]  00         Zero-pad to 136 bytes ── bytepad for free
+  [rest]  00         Zero-pad to 136 bytes (bytepad)
 ```
 
-> The remaining bits of the 1088-bit `absorb_buffer` default to zero,
-> so `bytepad` padding requires no extra logic.
+The two resulting post-prefix states are stored as `SPONGE_POW[0:24]` and
+`SPONGE_HH[0:24]` (25 × 64-bit lanes each) and selected by `s_value` in Stage 1.
 
 ### S Value Selection
 
@@ -167,130 +168,97 @@ prefix **combinationally** in `ENCODE_PREFIX` — no runtime encoding needed:
  └─────────────┴──────────────────────┴───────────────────────────────────┘
 ```
 
-Both strings are stored as little-endian ASCII `localparam`s and MUXed into
-the absorb buffer by the single `s_value` bit.
+### Message Block Encoding (Stage 0)
 
----
-
-## Data Block Padding (`ABSORB_INPUT`)
-
-The input is placed at the bottom of the 1088-bit absorb buffer with
-cSHAKE256 domain-separation padding. The `0x04` byte position depends on
-the input size, selected by `data_80byte`:
+Stage 0 builds the second (data) rate block combinationally into `pr0`, with the
+`0x04` cSHAKE domain-separation byte placed just past the message and the final
+pad bit `0x80` in the top rate byte:
 
 ```
   80-byte input (data_80byte = 1):
-  1087                           647  639                          0
+  1087                           671  663                          0
   ┌──────┬───────────────────────┬────┬────────────────────────────┐
-  │ 0x80 │     0x00 ... 00      │0x04│         data_in            │
-  │      │   (implicit zeros)   │    │        (640 bits)          │
+  │ 0x80 │     0x00 ... 00       │0x04│  data_in  (640 bits) + hdr │
   └──────┴───────────────────────┴────┴────────────────────────────┘
 
   32-byte input (data_80byte = 0):
-  1087                                 263  255                    0
+  1087                                 287  279                    0
   ┌──────┬─────────────────────────────┬────┬──────────────────────┐
-  │ 0x80 │        0x00 ... 00          │0x04│      data_in         │
-  │      │      (implicit zeros)       │    │   (256 bits used)    │
+  │ 0x80 │        0x00 ... 00          │0x04│   data_in[255:0]     │
   └──────┴─────────────────────────────┴────┴──────────────────────┘
      ▲                                    ▲
-     │                                    │
-     │  Final Keccak pad bit              │  cSHAKE padding byte
-     │  (high bit of last rate byte)      │  (0x04, NOT 0x1F)
+     │  final Keccak pad bit              │  cSHAKE padding byte
+     │  (high bit of last rate byte)      │  (0x04, NOT 0x1F → cSHAKE not SHAKE)
 ```
 
-> **Critical distinction:** The `0x04` padding byte is what makes this
-> cSHAKE256 rather than SHAKE256 (which uses `0x1F`). Since the core
-> is always in cSHAKE mode (S is never empty), this is hardcoded.
+The low bytes hold `left_encode(bit_len)` (`0x02 0x02 0x80` for 640 bits, or
+`0x02 0x01 0x00` for 256 bits) followed by the message. Remaining bits default to
+zero, so `bytepad` needs no extra logic.
+
+> **Critical distinction:** the `0x04` byte is what makes this **cSHAKE256** rather
+> than SHAKE256 (`0x1F`). Since `S` is never empty, this is hardcoded.
 
 ---
 
-## Datapath
+## Output
+
+The 256-bit result is the first four lanes of the final Keccak state, read as
+little-endian bytes:
 
 ```
-                           s_value
-                              │
-              ┌───────────────┼───────────────┐
-              │           ┌───▼───┐           │
-              │           │ S MUX │           │
-              │           │ 0 / 1 │           │
-              │           └───┬───┘           │
-              │               │               │
-              │   ┌───────────▼────────────┐  │
-              │   │    Prefix Builder      │  │
-              │   │  left_encode + S bytes │  │
-              │   └───────────┬────────────┘  │
-              │               │               │
-              │       ┌───────▼───────┐       │
-  data_in ────┼──────►│ absorb_buffer │       │
-  [639:0]     │       │  1088-bit MUX │       │
-              │       │ (prefix/data) │       │
-              │       └───────┬───────┘       │
-              │               │               │
-              │       ┌───────▼───────┐       │
-              │       │    absorber   │       │
-              │       │  XOR 17 lanes │       │
-              │       │      +        │       │
-              │       │ Keccak-f[1600]│       │
-              │       │  (24 rounds)  │       │
-              │       └───────┬───────┘       │
-              │               │               │
-              │       ┌───────▼───────┐       │
-              │       │  data_state   │       │
-              │       │ 1600-bit reg  │       │
-              │       └───────┬───────┘       │
-              │               │               │
-              │       ┌───────▼───────┐       │
-              │       │   hash_out    │       │
-              │       │ [255:0] latch │       │
-              │       └───────────────┘       │
-              │                               │
-              └───────────────────────────────┘
+hash_out = kstate[NUM_STAGES-1][255:0]
+         = A[0][0] (bits  63:0)   | A[1][0] (bits 127:64)
+         | A[2][0] (bits 191:128) | A[3][0] (bits 255:192)
 ```
 
 ---
 
 ## Resource Usage
 
-### Sub-Module Hierarchy
-
 ```
-  cshake256_core
-   └─── cshake256_absorb
-         └─── keccak_f1600
-               └─── keccak_round    (combinational, instantiated once, iterated 24x)
-```
-
-### Register & Logic Breakdown
-
-```
-  Resource                Source               Size
-  ──────────────────────  ───────────────────  ──────────────────────────
-  Keccak state register   cshake256_absorb     1,600 FF  (25 x 64-bit lanes)
-  Data state register     cshake256_core       1,600 FF
-  Hash output register    cshake256_core         256 FF
-  Absorb buffer MUX       cshake256_core       1,088-bit  2:1 MUX
-  S-string MUX            cshake256_core         120-bit  2:1 MUX
-  Keccak round logic      keccak_round          ~50k gates (theta/rho/pi/chi/iota)
-  Round counter            keccak_f1600            5-bit counter
-  FSM registers           both modules         3-bit + 2-bit
-  ──────────────────────  ───────────────────  ──────────────────────────
-  Total registers                              ~3,456 FF
+  cshake256_pipelined_core
+   ├─ Stage 0  Encode Msg        (combinational)
+   ├─ Stage 1  XOR into SpongeState (combinational + pr1 register)
+   └─ Keccak layers × NUM_STAGES
+        └─ keccak_round  ×24 total (theta/rho/pi/chi/iota, purely combinational)
 ```
 
-**Critical path:** The `keccak_round` combinational block (all five Keccak steps in
-a single cycle). This is the same bottleneck as any single-round-per-cycle Keccak design.
+```
+  Resource                Source                         Size (NUM_STAGES = 24)
+  ──────────────────────  ─────────────────────────────  ──────────────────────
+  Encoded block register  pr0                            1,088 FF
+  Sponge-state register   pr1                            1,600 FF
+  Keccak pipeline regs    kstate[0..NUM_STAGES-1]        NUM_STAGES × 1,600 FF
+  Valid shift register    valid_sr                       NUM_STAGES + 2 FF
+  Keccak round logic      keccak_round ×24               24 rounds of theta..iota
+  ──────────────────────  ─────────────────────────────  ──────────────────────
+  Total (NUM_STAGES=24)                                  1088 + 25×1600 ≈ 41,088 FF
+```
 
-### Why Two 1600-bit State Registers?
+Lower `NUM_STAGES` reduces the `kstate` register count (= `NUM_STAGES`) proportionally
+while keeping all 24 rounds of combinational logic.
 
-The core keeps its own `data_state` to hold the Keccak state **between** the two absorb
-passes. The absorber's internal state is reset (via `rst`) before each pass, and the
-core feeds accumulated state back through `absorb_state_out`. This keeps the absorber
-a simple single-block unit — it doesn't need to manage multi-pass state internally.
+**Critical path:** `ROUNDS_PER_STAGE` chained `keccak_round` blocks. At the default
+`NUM_STAGES = 24` this is a single round — the same bound as any 1-round-per-cycle
+Keccak design, but here at 1 hash/cycle throughput.
+
+---
+
+## Verification
+
+Two Verilator testbenches drive the core from the Python reference model:
 
 ```
-  Pass 1 (prefix):   absorber resets ──► XOR + permute ──► result → data_state
-  Pass 2 (data):     absorber resets ──► XOR + permute ──► result → data_state → hash_out
+make runtest                 # correctness (HeavyHash + ProofOfWorkHash) + latency
+make throughput              # 1 hash/cycle steady-state benchmark
+make runtest    NUM_STAGES=N # build the DUT with N pipeline layers (N | 24)
+make throughput NUM_STAGES=N
 ```
+
+- **`cshake256_tb`** sends inputs back-to-back and compares each hash to the
+  reference on consecutive cycles.
+- **`throughput_tb`** drives `valid_in` every cycle and reports measured
+  hashes/cycle (converges to the ideal 1.0).
 
 ---
 
@@ -299,4 +267,5 @@ a simple single-block unit — it doesn't need to manage multi-pass state intern
 - **NIST SP 800-185** — SHA-3 Derived Functions (cSHAKE specification)
 - **NIST FIPS 202** — SHA-3 Standard (Keccak-f[1600])
 - **kHeavyHash** — https://github.com/bcutil/kheavyhash
-- **Companion docs** — [cSHAKE256 Absorb RTL](cshake256_absorb.md) | [cSHAKE256 algorithm](cSHAKE256.md) | [Keccak-f RTL](keccak.md)
+- **Companion docs** — [cSHAKE256 algorithm](cSHAKE256.md) | [Keccak-f RTL](keccak.md)
+- **Design notes** — `hw/crypto/cshake256/rtl/Notes.txt`

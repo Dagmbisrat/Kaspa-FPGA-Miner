@@ -217,11 +217,35 @@ S values :
 =======================================================================================================================================================================
 
 
-    1. Pipelined Architecture (1 Keccak round per stage)
+    1. Pipelined Architecture (parametric feed-forward sub-pipeline)
+
+        Module   : cshake256_pipelined_core   (rtl/cshake256_core.sv)
+        Parameter: NUM_STAGES  — Keccak pipeline register layers (must divide 24)
 
         Overview:
-            26 pipeline stages total. A new nonce enters every clock cycle.
-            After the 26-cycle fill latency, one hash result emerges per clock.
+            The 24 Keccak rounds are split across NUM_STAGES register layers,
+            each computing ROUNDS_PER_STAGE = 24 / NUM_STAGES rounds combinationally
+            and then registering.  There is NO feedback — data flows straight
+            through, so a new nonce enters every clock cycle and one hash emerges
+            every cycle after the fill.  Throughput is ALWAYS 1 hash/cycle,
+            independent of NUM_STAGES.
+
+            Fill latency = NUM_STAGES + 2 cycles  (Encode + XOR sponge + NUM_STAGES
+            Keccak layers).
+
+            NUM_STAGES is the Fmax-vs-area knob (throughput stays 1 hash/cycle):
+                NUM_STAGES = 24 → 1 round / stage   → highest Fmax, most registers
+                NUM_STAGES = 12 → 2 rounds / stage  → ~half Fmax, half the registers
+                NUM_STAGES = 1  → 24 rounds / stage → lowest Fmax, fewest registers
+            Total keccak_round instances = NUM_STAGES × ROUNDS_PER_STAGE = 24 always.
+
+            Pipeline registers: pr0 (encode), pr1 (XOR sponge), kstate[0..NUM_STAGES-1].
+            valid_in is delayed through valid_sr and tapped (valid_sr[LAT-2]) so
+            valid_out lines up exactly with hash_out.
+
+        The stage layout below shows the default NUM_STAGES = 24 (one round per
+        stage); for smaller NUM_STAGES each stage folds ROUNDS_PER_STAGE rounds
+        combinationally between registers.
 
         Stage layout:
             Stage  0  [Encode Msg   ]  combinational → PR0  (1088-bit formatted block)
@@ -252,10 +276,13 @@ S values :
             Stage 25  [Round 23     ]  keccak_round(PR24, RC[23]) → PR25  (1600-bit final state)
             Stage 26  [Output       ]  hash_out = PR25[255:0]  (256-bit result)
 
-        Register widths:
-            PR0          : 1088 bits  (17 × 64-bit formatted message lanes)
-            PR1 – PR25   : 1600 bits  (25 × 64-bit Keccak state lanes)
+        Register widths (default NUM_STAGES = 24):
+            pr0          : 1088 bits  (17 × 64-bit formatted message lanes)
+            pr1          : 1600 bits  (post XOR-into-sponge state)
+            kstate[0..23]: 1600 bits each  (one per Keccak layer)
             Total FF cost: 1088 + (25 × 1600) = 41,088 flip-flops
+            Lower NUM_STAGES cuts the kstate registers proportionally
+            (kstate count = NUM_STAGES) while keeping all 24 rounds of logic.
 
         How a nonce flows through (timing diagram, showing 4 consecutive nonces):
 

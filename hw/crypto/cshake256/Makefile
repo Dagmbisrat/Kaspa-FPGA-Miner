@@ -22,6 +22,7 @@ help:
 	@echo "  make runtest              - Generate vectors, compile, run correctness + latency"
 	@echo "  make throughput           - Throughput sweep across 7 batch sizes"
 	@echo "  make throughput CLK_MHZ=N - Throughput sweep at N MHz (default 500)"
+	@echo "  make runtest NUM_STAGES=N - Build DUT with N Keccak pipeline layers (must divide 24; default 24)"
 	@echo "  make wave                 - Run and open waveform in GTKWave"
 	@echo "  make vectors              - Regenerate test vectors from Python reference"
 	@echo "  make clean                - Remove generated files"
