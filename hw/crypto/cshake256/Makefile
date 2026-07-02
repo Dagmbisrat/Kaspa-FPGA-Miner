@@ -12,6 +12,8 @@ OBJDIR_TP = /tmp/cshake256_tp_build
 VECTORS = sim/expected_vectors.mem
 
 CLK_MHZ ?= 500
+JOBS    ?= 4
+NUM_STAGES ?= 24
 
 .PHONY: all runtest throughput wave vectors clean help
 
@@ -28,14 +30,14 @@ vectors:
 	python3 sim/gen_vectors.py
 
 $(OBJDIR)/V$(TOP): $(SRC) $(TB)
-	verilator --binary --timing --trace -j 0 -Wno-fatal \
+	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal -GNUM_STAGES=$(NUM_STAGES) \
 	          --top-module $(TOP) --Mdir $(OBJDIR) $(SRC) $(TB)
 
 runtest: vectors $(OBJDIR)/V$(TOP)
 	$(OBJDIR)/V$(TOP)
 
 $(OBJDIR_TP)/V$(TOP_TP): $(SRC) $(TB_TP)
-	verilator --binary --timing -j 0 -Wno-fatal \
+	verilator --binary --timing -j $(JOBS) -Wno-fatal -GNUM_STAGES=$(NUM_STAGES) \
 	          --top-module $(TOP_TP) --Mdir $(OBJDIR_TP) $(SRC) $(TB_TP)
 
 throughput: $(OBJDIR_TP)/V$(TOP_TP)

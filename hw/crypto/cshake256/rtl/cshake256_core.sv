@@ -1,5 +1,5 @@
 module cshake256_pipelined_core #(
-    parameter int NUM_STAGES = 4  // keccak_round instances per iteration; must divide 24
+    parameter int NUM_STAGES = 24  // pipeline register layers for the 24 Keccak rounds; must divide 24
 ) (
     input  logic          clk,
     input  logic          rst,
@@ -18,9 +18,12 @@ module cshake256_pipelined_core #(
 localparam int RATE_BITS  = 1088;  // 136 bytes
 localparam int STATE_BITS = 1600;  // 25 x 64-bit lanes
 localparam int NUM_ROUNDS = 24;
-localparam int ITERS      = NUM_ROUNDS / NUM_STAGES;
-// Minimum 1 bit so the counter declaration is always legal (handles ITERS==1)
-localparam int ITER_BITS  = (ITERS > 1) ? $clog2(ITERS) : 1;
+// Feed-forward sub-pipeline: NUM_STAGES register layers, each computing
+// ROUNDS_PER_STAGE Keccak rounds combinationally.  Total round instances =
+// NUM_STAGES * ROUNDS_PER_STAGE = 24 regardless of NUM_STAGES.
+localparam int ROUNDS_PER_STAGE = NUM_ROUNDS / NUM_STAGES;
+// Latency = 1 (encode) + 1 (xor sponge) + NUM_STAGES (keccak layers) cycles.
+localparam int LAT = NUM_STAGES + 2;
 
 initial begin
     assert (NUM_ROUNDS % NUM_STAGES == 0)
@@ -32,15 +35,12 @@ end
 logic [RATE_BITS-1:0]  pr0;  // Stage 0: encoded message block
 logic [STATE_BITS-1:0] pr1;  // Stage 1: after XOR into sponge state
 
-// Valid shift register — 2+ITERS bits.
-// Bit 0: stage 0 done.  Bit 1: stage 1 done (pr1 valid).
-// Bits 2..1+ITERS: one bit per keccak iteration.  Bit 1+ITERS: output valid.
-logic [1+ITERS:0] valid_sr;
+// Valid shift register — one bit per pipeline stage (feed-forward, no stalls).
+logic [LAT-1:0] valid_sr;
 
-// Folded keccak state
-logic [STATE_BITS-1:0]  fold_state;
-logic [ITER_BITS-1:0]   iter;
-logic                   keccak_active;
+// Feed-forward Keccak — one 1600-bit register per pipeline stage.
+// A new hash may enter every cycle; result emerges LAT cycles later.
+logic [STATE_BITS-1:0] kstate [0:NUM_STAGES-1];
 
 
 // Round constants
@@ -85,8 +85,9 @@ always_comb begin
 end
 
 always_ff @(posedge clk) begin
-    pr0      <= stage0_comb;
-    valid_sr <= {valid_sr[ITERS:0], valid_in};
+    pr0 <= stage0_comb;
+    if (rst) valid_sr <= '0;
+    else     valid_sr <= {valid_sr[LAT-2:0], valid_in};
 end
 // -------------------------------------------------------------------------
 
@@ -94,7 +95,7 @@ end
 // ********************** Stage 1 : XOR into SpongeState  ******************
 // -------------------------------------------------------------------------
 // Pre-computed SpongeState constants (post-header Keccak-f output)
-// Lane ordering: lane_idx = x + 5*y  (matches absorb module convention)
+// Lane ordering: lane_idx = x + 5*y
 logic [63:0] SPONGE_POW [0:24];
 initial begin
     SPONGE_POW[ 0] = 64'h113cff0da1f6d83d;  // A[0][0]
@@ -170,82 +171,65 @@ always_ff @(posedge clk)
 // -------------------------------------------------------------------------
 
 
-// ********************** Folded Keccak : NUM_STAGES instances, ITERS passes
+// ********************** Feed-Forward Keccak : NUM_STAGES layers **********
 // -------------------------------------------------------------------------
-// Timing overview (valid_in asserts before edge T):
-//   Edge T        : pr0 captured,  valid_sr[0] set, iter reset to 0
-//   Edge T+1      : pr1 captured,  valid_sr[1] set, keccak_active set
-//   Edge T+2      : fold_state <- rounds 0..NUM_STAGES-1 on pr1, valid_sr[2] set
-//   Edge T+2+k    : fold_state <- rounds k*NUM_STAGES..(k+1)*NUM_STAGES-1
-//   Edge T+1+ITERS: fold_state <- final round group, valid_sr[1+ITERS]=valid_out
+// The 24 Keccak rounds are split into NUM_STAGES pipeline stages, each stage
+// computing ROUNDS_PER_STAGE = 24/NUM_STAGES rounds combinationally, then
+// registering into kstate[st].  There is NO feedback: data flows straight
+// through, so a new hash may enter every clock cycle (initiation interval = 1)
+// and one hash result emerges every cycle after the LAT-cycle fill.
 //
-// Constraint: assert valid_in at most once every 2+ITERS cycles.
+// Critical path = ROUNDS_PER_STAGE Keccak rounds (this is the Fmax knob).
+//   NUM_STAGES = 24 -> 1 round / stage  -> highest Fmax
+//   NUM_STAGES < 24 -> more rounds/stage -> lower Fmax, fewer registers
+//
+// Global round index for stage st, inner round r is st*ROUNDS_PER_STAGE + r,
+// which sweeps 0..23 from pr1 to hash_out.  All round constants are static.
 // -------------------------------------------------------------------------
-
-// Iteration counter control.
-// Triggered by valid_sr[0] so iter=0 lands one cycle before fold_state
-// first captures, keeping it aligned with pr1 availability and the mux below.
-always_ff @(posedge clk) begin
-    if (rst) begin
-        iter          <= '0;
-        keccak_active <= 1'b0;
-    end else if (valid_sr[0]) begin          // stage 0 just fired → pr1 captured next edge
-        iter          <= '0;
-        keccak_active <= 1'b1;
-    end else if (keccak_active) begin
-        if (iter == ITER_BITS'(ITERS - 1)) begin
-            keccak_active <= 1'b0;
-            iter          <= '0;
-        end else begin
-            iter <= iter + 1'b1;
-        end
-    end
-end
-
-// Chain of NUM_STAGES purely-combinational keccak_round instances.
-// chain[0] is the chain input; chain[NUM_STAGES] is the chain output.
-logic [63:0] chain [0:NUM_STAGES][0:4][0:4];
-
-// Iteration 0: feed pr1 (just registered by stage 1).
-// Iterations 1..ITERS-1: feed the previous fold_state.
-// valid_sr[1] is exactly 1 during the combinational window of iteration 0.
-always_comb begin
-    for (int x = 0; x < 5; x++)
-        for (int y = 0; y < 5; y++)
-            chain[0][x][y] = valid_sr[1]
-                ? pr1[(x + 5*y)*64 +: 64]
-                : fold_state[(x + 5*y)*64 +: 64];
-end
-
-genvar s;
+genvar st, r;
 generate
-    for (s = 0; s < NUM_STAGES; s++) begin : g_fold
-        // Round index for instance s in iteration iter:
-        //   iter * NUM_STAGES + s  (always in 0..23)
-        wire [4:0] rc_idx;
-        assign rc_idx = 5'(iter) * 5'(NUM_STAGES) + 5'(s);
+    for (st = 0; st < NUM_STAGES; st++) begin : g_stage
+        // Combinational chain of ROUNDS_PER_STAGE rounds.
+        // chain[0] = stage input, chain[ROUNDS_PER_STAGE] = stage output.
+        logic [63:0] chain [0:ROUNDS_PER_STAGE][0:4][0:4];
 
-        keccak_round u_round (
-            .state          (chain[s]),
-            .round_constant (RC[rc_idx]),
-            .out            (chain[s+1])
-        );
+        // Stage input mux via generate-if to avoid an illegal kstate[-1] index.
+        if (st == 0) begin : g_in_first
+            always_comb
+                for (int x = 0; x < 5; x++)
+                    for (int y = 0; y < 5; y++)
+                        chain[0][x][y] = pr1[(x + 5*y)*64 +: 64];
+        end else begin : g_in_rest
+            always_comb
+                for (int x = 0; x < 5; x++)
+                    for (int y = 0; y < 5; y++)
+                        chain[0][x][y] = kstate[st-1][(x + 5*y)*64 +: 64];
+        end
+
+        // ROUNDS_PER_STAGE purely-combinational keccak_round instances.
+        for (r = 0; r < ROUNDS_PER_STAGE; r++) begin : g_round
+            localparam int GLOBAL_R = st*ROUNDS_PER_STAGE + r;  // 0..23
+            keccak_round u_round (
+                .state          (chain[r]),
+                .round_constant (RC[GLOBAL_R]),
+                .out            (chain[r+1])
+            );
+        end
+
+        // Register this stage's output.
+        always_ff @(posedge clk)
+            for (int x = 0; x < 5; x++)
+                for (int y = 0; y < 5; y++)
+                    kstate[st][(x + 5*y)*64 +: 64] <= chain[ROUNDS_PER_STAGE][x][y];
     end
 endgenerate
-
-// Register chain output every cycle; only meaningful when keccak_active.
-always_ff @(posedge clk) begin
-    for (int x = 0; x < 5; x++)
-        for (int y = 0; y < 5; y++)
-            fold_state[(x + 5*y)*64 +: 64] <= chain[NUM_STAGES][x][y];
-end
 // -------------------------------------------------------------------------
 
 
 // ********************** Output *******************************************
 // -------------------------------------------------------------------------
-assign hash_out  = fold_state[255:0];
-assign valid_out = valid_sr[1 + ITERS];
+assign hash_out  = kstate[NUM_STAGES-1][255:0];
+assign valid_out = valid_sr[LAT-2];  // aligns valid_out with hash_out (kstate[NUM_STAGES-1])
 // -------------------------------------------------------------------------
 
 endmodule
