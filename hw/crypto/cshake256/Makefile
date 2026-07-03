@@ -31,7 +31,7 @@ help:
 	@echo "  CLK_MHZ=$(CLK_MHZ)    - Assumed clock for the throughput MH/s column"
 	@echo "  JOBS=$(JOBS)        - Parallel Verilator / C++ build jobs"
 	@echo ""
-	@echo "throughput plusargs (CLK_MHZ wired automatically): +clk_mhz=N  +s_value=0|1"
+	@echo "throughput plusarg: +clk_mhz=N   (hash mode is compile-time: -GS_VALUE=0|1 -GDATA_80BYTE=0|1)"
 
 vectors:
 	python3 sim/gen_vectors.py
@@ -48,7 +48,7 @@ $(OBJDIR_TP)/V$(TOP_TP): $(SRC) $(TB_TP)
 	          --top-module $(TOP_TP) --Mdir $(OBJDIR_TP) $(SRC) $(TB_TP)
 
 throughput: $(OBJDIR_TP)/V$(TOP_TP)
-	$(OBJDIR_TP)/V$(TOP_TP) +clk_mhz=$(CLK_MHZ) +s_value=1
+	$(OBJDIR_TP)/V$(TOP_TP) +clk_mhz=$(CLK_MHZ)
 
 wave: runtest
 	gtkwave sim/$(TOP).vcd

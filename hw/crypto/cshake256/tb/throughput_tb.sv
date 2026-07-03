@@ -2,6 +2,11 @@
 //
 // throughput_tb.sv — Throughput benchmark for cshake256_pipelined_core
 //
+// The hash mode is fixed at BUILD TIME via the S_VALUE / DATA_80BYTE params.
+// Throughput is mode-independent (feed-forward, ideal 1.0 H/cycle), so this
+// benchmark builds the HeavyHash configuration by default.  Override the mode
+// at compile time with -GS_VALUE=<0|1> -GDATA_80BYTE=<0|1>.
+//
 // Feed-forward pipeline: one input accepted per cycle, one hash produced per
 // cycle after the LATENCY = NUM_STAGES + 2 cycle fill.  Each batch drives
 // valid_in every cycle and counts edges from the first sampled input to the
@@ -14,14 +19,17 @@
 //
 // Plusarg overrides:
 //   +clk_mhz=N   assumed clock for MH/s display  (default 500)
-//   +s_value=N   hash mode: 1=HeavyHash, 0=POW   (default 1)
 // Compile-time:
-//   -GNUM_STAGES=<n>   pipeline depth of the DUT (default 24; must divide 24)
+//   -GNUM_STAGES=<n>    pipeline depth of the DUT (default 24; must divide 24)
+//   -GS_VALUE=<0|1>     hash mode (default 1 = HeavyHash)
+//   -GDATA_80BYTE=<0|1> input size (default 0 = 32-byte)
 
 module throughput_tb;
 
-  // ── Parameters ───────────────────────────────────────────────────────────────
-  parameter int NUM_STAGES    = 24;   // override with -GNUM_STAGES=<n>
+  // ── Parameters ─────────────────────────────────────────────────────────────
+  parameter int NUM_STAGES    = 24;     // override with -GNUM_STAGES=<n>
+  parameter bit S_VALUE       = 1'b1;   // 1 = HeavyHash, 0 = ProofOfWorkHash
+  parameter bit DATA_80BYTE   = 1'b0;   // 0 = 32-byte, 1 = 80-byte
   parameter int CLK_PERIOD_NS = 10;
   localparam int LATENCY          = NUM_STAGES + 2;
   localparam int ROUNDS_PER_STAGE = 24 / NUM_STAGES;  // critical-path depth (Fmax proxy)
@@ -34,45 +42,42 @@ module throughput_tb;
   logic         clk;
   logic         rst;
   logic [639:0] data_in;
-  logic         data_80byte;
-  logic         s_value;
   logic         valid_in;
   logic [255:0] hash_out;
   logic         valid_out;
 
-  // ── DUT ──────────────────────────────────────────────────────────────────────
-  cshake256_pipelined_core #(.NUM_STAGES(NUM_STAGES)) uut (
-    .clk         (clk),
-    .rst         (rst),
-    .data_in     (data_in),
-    .data_80byte (data_80byte),
-    .s_value     (s_value),
-    .valid_in    (valid_in),
-    .hash_out    (hash_out),
-    .valid_out   (valid_out)
+  // ── DUT (mode fixed at build time) ─────────────────────────────────────────
+  cshake256_pipelined_core #(
+    .NUM_STAGES (NUM_STAGES),
+    .S_VALUE    (S_VALUE),
+    .DATA_80BYTE(DATA_80BYTE)
+  ) uut (
+    .clk       (clk),
+    .rst       (rst),
+    .data_in   (data_in),
+    .valid_in  (valid_in),
+    .hash_out  (hash_out),
+    .valid_out (valid_out)
   );
 
   always #(CLK_PERIOD_NS / 2) clk = ~clk;
 
-  // ── Plusarg knobs ────────────────────────────────────────────────────────────
+  // ── Plusarg knobs ──────────────────────────────────────────────────────────
   integer clk_mhz = 500;
-  integer s_val   = 1;
 
-  // ── Statistics ────────────────────────────────────────────────────────────────
+  // ── Statistics ─────────────────────────────────────────────────────────────
   real    min_tp, max_tp, sum_tp;
   integer bi;
   real    throughput;
 
-  // ── Main ─────────────────────────────────────────────────────────────────────
+  // ── Main ───────────────────────────────────────────────────────────────────
   initial begin
     // No VCD — trace files for large batches would be enormous
 
     void'($value$plusargs("clk_mhz=%d", clk_mhz));
-    void'($value$plusargs("s_value=%d", s_val));
 
     clk = 0; rst = 1; valid_in = 0;
-    data_in = '0; data_80byte = 1;
-    s_value = logic'(s_val[0]);
+    data_in = '0;
 
     min_tp = 1e30; max_tp = 0.0; sum_tp = 0.0;
 
@@ -84,8 +89,8 @@ module throughput_tb;
     $display("═══════════════════════════════════════════════════════════════");
     $display(" cshake256_pipelined_core  —  Throughput Benchmark");
     $display("───────────────────────────────────────────────────────────────");
-    $display("  Mode     : %s (s_value=%0b)",
-             s_val ? "HeavyHash" : "ProofOfWorkHash", s_val[0]);
+    $display("  Mode     : %s (S_VALUE=%0b)",
+             S_VALUE ? "HeavyHash" : "ProofOfWorkHash", S_VALUE);
     $display("  Clock    : %0d MHz (assumed for MH/s)", clk_mhz);
     $display("  Pipeline : NUM_STAGES=%0d  (fill latency %0d cycles)", NUM_STAGES, LATENCY);
     $display("  Timing   : %0d Keccak round(s)/stage on the critical path (Fmax knob)", ROUNDS_PER_STAGE);
@@ -136,7 +141,7 @@ module throughput_tb;
       repeat (LATENCY + 4) @(posedge clk);
     end
 
-    // ── Summary ────────────────────────────────────────────────────────────────
+    // ── Summary ──────────────────────────────────────────────────────────────
     $display("───────────────────────────────────────────────────────────────");
     $display("  Min throughput : %.6f H/cycle  (%.2f MH/s)",
              min_tp, min_tp * real'(clk_mhz));

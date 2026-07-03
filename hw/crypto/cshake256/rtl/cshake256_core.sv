@@ -1,13 +1,13 @@
 module cshake256_pipelined_core #(
-    parameter int NUM_STAGES = 24  // pipeline register layers for the 24 Keccak rounds; must divide 24
+    parameter int NUM_STAGES  = 24,   // pipeline register layers for the 24 Keccak rounds; must divide 24
+    parameter bit S_VALUE     = 1'b0, // BUILD-TIME S string: 0 = "ProofOfWorkHash", 1 = "HeavyHash"
+    parameter bit DATA_80BYTE = 1'b1  // BUILD-TIME input size: 0 = 32-byte input, 1 = 80-byte input
 ) (
     input  logic          clk,
     input  logic          rst,
 
     // Input
     input  logic [639:0]  data_in,
-    input  logic          data_80byte,  // 0: 32-byte input, 1: 80-byte input
-    input  logic          s_value,      // 0: S = "ProofOfWorkHash", 1: S = "HeavyHash"
     input  logic          valid_in,
 
     // Output
@@ -58,12 +58,14 @@ localparam logic [63:0] RC [0:23] = '{
 
 // ********************** Stage 0 : Encode Msg  ****************************
 // -------------------------------------------------------------------------
+// The input size is fixed at build time by DATA_80BYTE, so only one encoding
+// branch is elaborated (the other is pruned as dead logic).
 logic [RATE_BITS-1:0] stage0_comb;
 
 always_comb begin
     stage0_comb = '0;
 
-    if (data_80byte) begin
+    if (DATA_80BYTE) begin
         // left_encode(640) = 0x02, 0x02, 0x80
         stage0_comb[7:0]       = 8'h02;
         stage0_comb[15:8]      = 8'h02;
@@ -94,76 +96,47 @@ end
 
 // ********************** Stage 1 : XOR into SpongeState  ******************
 // -------------------------------------------------------------------------
-// Pre-computed SpongeState constants (post-header Keccak-f output)
-// Lane ordering: lane_idx = x + 5*y
-logic [63:0] SPONGE_POW [0:24];
-initial begin
-    SPONGE_POW[ 0] = 64'h113cff0da1f6d83d;  // A[0][0]
-    SPONGE_POW[ 1] = 64'h29bf8855b7027e3c;  // A[1][0]
-    SPONGE_POW[ 2] = 64'h1e5f2e720efb44d2;  // A[2][0]
-    SPONGE_POW[ 3] = 64'h1ba5a4a3f59869a0;  // A[3][0]
-    SPONGE_POW[ 4] = 64'h7b2fafca875e2d65;  // A[4][0]
-    SPONGE_POW[ 5] = 64'h4aef61d629dce246;  // A[0][1]
-    SPONGE_POW[ 6] = 64'h183a981ead415b10;  // A[1][1]
-    SPONGE_POW[ 7] = 64'h776bf60c789bc29c;  // A[2][1]
-    SPONGE_POW[ 8] = 64'hf8ebf13388663140;  // A[3][1]
-    SPONGE_POW[ 9] = 64'h2e651c3c43285ff0;  // A[4][1]
-    SPONGE_POW[10] = 64'h0f96070540f14a0e;  // A[0][2]
-    SPONGE_POW[11] = 64'h44e367875b299152;  // A[1][2]
-    SPONGE_POW[12] = 64'hec70f1a425b13715;  // A[2][2]
-    SPONGE_POW[13] = 64'he6c85d8f82e9da89;  // A[3][2]
-    SPONGE_POW[14] = 64'hb21a601f85b4b223;  // A[4][2]
-    SPONGE_POW[15] = 64'h3485549064a36a46;  // A[0][3]
-    SPONGE_POW[16] = 64'h8f06dd1c7a2f851a;  // A[1][3]
-    SPONGE_POW[17] = 64'hc1a2021d563bb142;  // A[2][3]
-    SPONGE_POW[18] = 64'hba1de5e4451668e4;  // A[3][3]
-    SPONGE_POW[19] = 64'hd102574105095f8d;  // A[4][3]
-    SPONGE_POW[20] = 64'h89ca4e849bcecf4a;  // A[0][4]
-    SPONGE_POW[21] = 64'h48b09427a8742edb;  // A[1][4]
-    SPONGE_POW[22] = 64'hb1fcce9ce78b5272;  // A[2][4]
-    SPONGE_POW[23] = 64'h5d1129cf82afa5bc;  // A[3][4]
-    SPONGE_POW[24] = 64'h02b97c786f824383;  // A[4][4]
-end
+// Pre-computed SpongeState constants (post-header Keccak-f output).
+// Lane ordering: lane_idx = x + 5*y.  Both tables are declared as localparams
+// so the S_VALUE selection below is resolved at elaboration — only the chosen
+// table materializes as constants; the unused one produces no hardware.
+localparam logic [63:0] SPONGE_POW [0:24] = '{
+    64'h113cff0da1f6d83d, 64'h29bf8855b7027e3c, 64'h1e5f2e720efb44d2,
+    64'h1ba5a4a3f59869a0, 64'h7b2fafca875e2d65, 64'h4aef61d629dce246,
+    64'h183a981ead415b10, 64'h776bf60c789bc29c, 64'hf8ebf13388663140,
+    64'h2e651c3c43285ff0, 64'h0f96070540f14a0e, 64'h44e367875b299152,
+    64'hec70f1a425b13715, 64'he6c85d8f82e9da89, 64'hb21a601f85b4b223,
+    64'h3485549064a36a46, 64'h8f06dd1c7a2f851a, 64'hc1a2021d563bb142,
+    64'hba1de5e4451668e4, 64'hd102574105095f8d, 64'h89ca4e849bcecf4a,
+    64'h48b09427a8742edb, 64'hb1fcce9ce78b5272, 64'h5d1129cf82afa5bc,
+    64'h02b97c786f824383
+};
 
-logic [63:0] SPONGE_HH [0:24];
-initial begin
-    SPONGE_HH[ 0] = 64'h3ad74c52b2248509;  // A[0][0]
-    SPONGE_HH[ 1] = 64'h79629b0e2f9f4216;  // A[1][0]
-    SPONGE_HH[ 2] = 64'h7a14ff4816c7f8ee;  // A[2][0]
-    SPONGE_HH[ 3] = 64'h11a75f4c80056498;  // A[3][0]
-    SPONGE_HH[ 4] = 64'he720e0df44eecede;  // A[4][0]
-    SPONGE_HH[ 5] = 64'h72c7d82e14f34069;  // A[0][1]
-    SPONGE_HH[ 6] = 64'hc100ff2a938935ba;  // A[1][1]
-    SPONGE_HH[ 7] = 64'h5e219040250fc462;  // A[2][1]
-    SPONGE_HH[ 8] = 64'h8039f9a60dcf6a48;  // A[3][1]
-    SPONGE_HH[ 9] = 64'ha0bcaa9f792a3d0c;  // A[4][1]
-    SPONGE_HH[10] = 64'hf431c05dd0a9a226;  // A[0][2]
-    SPONGE_HH[11] = 64'hd31f4cc354c18c3f;  // A[1][2]
-    SPONGE_HH[12] = 64'h6c6b7d01a769cc3d;  // A[2][2]
-    SPONGE_HH[13] = 64'h2ec65bd3562493e4;  // A[3][2]
-    SPONGE_HH[14] = 64'h4ef74b3a99cdb044;  // A[4][2]
-    SPONGE_HH[15] = 64'h774c86835434f2b0;  // A[0][3]
-    SPONGE_HH[16] = 64'h87e961b036bc9416;  // A[1][3]
-    SPONGE_HH[17] = 64'h7e8f1db17765cc07;  // A[2][3]
-    SPONGE_HH[18] = 64'hea8fdb80bac46d39;  // A[3][3]
-    SPONGE_HH[19] = 64'hb992f2d37b34ca58;  // A[4][3]
-    SPONGE_HH[20] = 64'hc776c5048481b957;  // A[0][4]
-    SPONGE_HH[21] = 64'h47c39f675112c22e;  // A[1][4]
-    SPONGE_HH[22] = 64'h92bb399db5290c0a;  // A[2][4]
-    SPONGE_HH[23] = 64'h549ae0312f9fc615;  // A[3][4]
-    SPONGE_HH[24] = 64'h1619327d10b9da35;  // A[4][4]
-end
+localparam logic [63:0] SPONGE_HH [0:24] = '{
+    64'h3ad74c52b2248509, 64'h79629b0e2f9f4216, 64'h7a14ff4816c7f8ee,
+    64'h11a75f4c80056498, 64'he720e0df44eecede, 64'h72c7d82e14f34069,
+    64'hc100ff2a938935ba, 64'h5e219040250fc462, 64'h8039f9a60dcf6a48,
+    64'ha0bcaa9f792a3d0c, 64'hf431c05dd0a9a226, 64'hd31f4cc354c18c3f,
+    64'h6c6b7d01a769cc3d, 64'h2ec65bd3562493e4, 64'h4ef74b3a99cdb044,
+    64'h774c86835434f2b0, 64'h87e961b036bc9416, 64'h7e8f1db17765cc07,
+    64'hea8fdb80bac46d39, 64'hb992f2d37b34ca58, 64'hc776c5048481b957,
+    64'h47c39f675112c22e, 64'h92bb399db5290c0a, 64'h549ae0312f9fc615,
+    64'h1619327d10b9da35
+};
+
+// Selected sponge constant (compile-time: S_VALUE fixes the whole table).
+localparam logic [63:0] SPONGE [0:24] = S_VALUE ? SPONGE_HH : SPONGE_POW;
 
 logic [STATE_BITS-1:0] stage1_comb;
 
 always_comb begin
     // Lanes 0-16 (rate): XOR formatted block lanes into SpongeState constant
     for (int i = 0; i < 17; i++)
-        stage1_comb[i*64 +: 64] = (s_value ? SPONGE_HH[i] : SPONGE_POW[i]) ^ pr0[i*64 +: 64];
+        stage1_comb[i*64 +: 64] = SPONGE[i] ^ pr0[i*64 +: 64];
 
     // Lanes 17-24 (capacity): pass through constant unchanged
     for (int i = 17; i < 25; i++)
-        stage1_comb[i*64 +: 64] = s_value ? SPONGE_HH[i] : SPONGE_POW[i];
+        stage1_comb[i*64 +: 64] = SPONGE[i];
 end
 
 always_ff @(posedge clk)

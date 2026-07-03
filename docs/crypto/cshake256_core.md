@@ -11,8 +11,11 @@ hash/cycle).
 
 It hardcodes the two customization strings used by kHeavyHash
 (`"ProofOfWorkHash"` and `"HeavyHash"`) and fixes the output at 256 bits, so all
-general-purpose cSHAKE encoding collapses to a fixed datapath with a single-bit
-selector.
+general-purpose cSHAKE encoding collapses to a fixed datapath.
+
+The `S` string and input size are fixed at **build time** by the `S_VALUE` and
+`DATA_80BYTE` parameters, so each instance is dedicated to a single hash mode and
+carries only the logic for that one configuration.
 
 > **Two key simplifications make the streaming pipeline possible**
 > 1. The cSHAKE **prefix block** (`bytepad(encode_string("") || encode_string(S), 136)`)
@@ -26,46 +29,51 @@ selector.
 | General cSHAKE256      | Kaspa Miner           | Simplification                        |
 | ---------------------- | --------------------- | ------------------------------------- |
 | Variable **N** string  | N = `""` always       | folded into the constant sponge state |
-| Variable **S** string  | S = one of two values | 1-bit MUX between two sponge constants |
+| Variable **S** string  | S = one of two values | Build-time `S_VALUE` picks one sponge constant |
 | Variable output length | Always 256 bits       | No squeeze loop — read first 4 lanes  |
-| Multi-block input      | 80B or 32B input      | Single message block, muxed pad offset |
+| Multi-block input      | 80B or 32B input      | Single block; build-time `DATA_80BYTE` pad offset |
 | Prefix absorb (block 1)| Constant per S        | Precomputed → `SPONGE_POW`/`SPONGE_HH` |
 
 ---
 
-## Ports & Parameter
+## Ports & Parameters
 
-### Parameter
+### Parameters
 
-| Parameter     | Default | Description                                                        |
-|:------------- |:-------:|:----------------------------------------------------------------- |
-| `NUM_STAGES`  | 24      | Keccak pipeline register layers. **Must divide 24.** Fmax-vs-area knob. |
+| Parameter     | Default | Description                                                                  |
+|:------------- |:-------:|:---------------------------------------------------------------------------- |
+| `NUM_STAGES`  | 24      | Keccak pipeline register layers. **Must divide 24.** Fmax-vs-area knob.       |
+| `S_VALUE`     | 0       | **Build-time** S string: **0** = `"ProofOfWorkHash"`, **1** = `"HeavyHash"`.  |
+| `DATA_80BYTE` | 1       | **Build-time** input size: **0** = 32-byte input, **1** = 80-byte input.      |
+
+> `S_VALUE` and `DATA_80BYTE` are **compile-time parameters, not ports** — each
+> instance is dedicated to one hash mode. This removes the runtime `s_value`
+> sponge MUX, drops the unused sponge table, and fixes the Stage-0 pad offset,
+> saving area when many cores are instantiated (e.g. a throughput pipeline with
+> one `S_VALUE=0` core feeding one `S_VALUE=1` core). A single time-shared engine
+> that must compute both hashes should instead use the serial `cshake256_core`.
 
 ### Ports
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  cshake256_pipelined_core #(NUM_STAGES)                  │
-│                                                          │
-│   clk         ───►                 ───► hash_out [255:0] │
-│   rst         ───►                 ───► valid_out        │
-│   data_in [639:0] ───►                                   │ 
-│   data_80byte ───►                                       │
-│   s_value     ───►                                       │
-│   valid_in    ───►                                       │
-└──────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│  cshake256_pipelined_core #(NUM_STAGES, S_VALUE, DATA_80BYTE) │
+│                                                              │
+│   clk         ───►                 ───► hash_out [255:0]     │
+│   rst         ───►                 ───► valid_out            │
+│   data_in [639:0] ───►                                       │
+│   valid_in    ───►                                           │
+└───────────────────────────────────────────────────────────────┘
 ```
 
-| Port          | Dir | Width | Description                                              |
-|:------------- |:---:|:-----:|:------------------------------------------------------- |
-| `clk`         | in  | 1     | Clock                                                    |
-| `rst`         | in  | 1     | Synchronous reset — clears `valid_sr` (no false outputs) |
-| `data_in`     | in  | 640   | Input message (80B header or 32B digest, zero-padded)    |
-| `data_80byte` | in  | 1     | **0** = 32-byte input, **1** = 80-byte input             |
-| `s_value`     | in  | 1     | **0** = `"ProofOfWorkHash"`, **1** = `"HeavyHash"`        |
-| `valid_in`    | in  | 1     | Assert to inject a new message on this cycle             |
-| `hash_out`    | out | 256   | cSHAKE256 result                                         |
-| `valid_out`   | out | 1     | High on the cycle `hash_out` is valid                    |
+| Port          | Dir | Width | Description                                                       |
+|:------------- |:---:|:-----:|:----------------------------------------------------------------- |
+| `clk`         | in  | 1     | Clock                                                             |
+| `rst`         | in  | 1     | Synchronous reset — clears `valid_sr` (no false outputs)          |
+| `data_in`     | in  | 640   | Input message; only `[255:0]` is used when `DATA_80BYTE = 0`      |
+| `valid_in`    | in  | 1     | Assert to inject a new message on this cycle                      |
+| `hash_out`    | out | 256   | cSHAKE256 result                                                  |
+| `valid_out`   | out | 1     | High on the cycle `hash_out` is valid                            |
 
 > There is **no** `start`/`done` handshake. Drive `valid_in` every cycle for full
 > throughput; `valid_out` tracks each result `NUM_STAGES + 2` cycles later.
@@ -88,7 +96,7 @@ The datapath is a straight feed-forward pipeline — no feedback, no FSM:
 | Stage        | Register  | Function                                                        |
 |:------------ |:--------- |:-------------------------------------------------------------- |
 | 0 Encode     | `pr0` (1088b) | Build the padded 136-byte message block (combinational)     |
-| 1 XOR Sponge | `pr1` (1600b) | XOR `pr0` into the precomputed sponge constant (`s_value` MUX) |
+| 1 XOR Sponge | `pr1` (1600b) | XOR `pr0` into the precomputed sponge constant (`S_VALUE`-selected) |
 | Keccak ×N    | `kstate[0..N-1]` (1600b each) | Each layer runs `ROUNDS_PER_STAGE` rounds then registers |
 | Output       | —         | `hash_out = kstate[NUM_STAGES-1][255:0]` (combinational)        |
 
@@ -152,19 +160,19 @@ hardcoded:
 ```
 
 The two resulting post-prefix states are stored as `SPONGE_POW[0:24]` and
-`SPONGE_HH[0:24]` (25 × 64-bit lanes each) and selected by `s_value` in Stage 1.
+`SPONGE_HH[0:24]` (25 × 64-bit lanes each) and selected at build time by `S_VALUE` in Stage 1 (the unused table is not synthesized).
 
 ### S Value Selection
 
 ```
  ┌─────────────┬──────────────────────┬───────────────────────────────────┐
- │  s_value    │  S String            │  Usage in kHeavyHash              │
+ │  S_VALUE    │  S String            │  Usage in kHeavyHash              │
  ├─────────────┼──────────────────────┼───────────────────────────────────┤
  │     0       │  "ProofOfWorkHash"   │  First hash:  cSHAKE256(header)   │
- │             │  15 bytes, 120 bits  │  80-byte input (data_80byte = 1)  │
+ │             │  15 bytes, 120 bits  │  80-byte input (DATA_80BYTE = 1)  │
  ├─────────────┼──────────────────────┼───────────────────────────────────┤
  │     1       │  "HeavyHash"         │  Final hash:  cSHAKE256(digest)   │
- │             │   9 bytes,  72 bits  │  32-byte input (data_80byte = 0)  │
+ │             │   9 bytes,  72 bits  │  32-byte input (DATA_80BYTE = 0)  │
  └─────────────┴──────────────────────┴───────────────────────────────────┘
 ```
 
@@ -175,13 +183,13 @@ Stage 0 builds the second (data) rate block combinationally into `pr0`, with the
 pad bit `0x80` in the top rate byte:
 
 ```
-  80-byte input (data_80byte = 1):
+  80-byte input (DATA_80BYTE = 1):
   1087                           671  663                          0
   ┌──────┬───────────────────────┬────┬────────────────────────────┐
   │ 0x80 │     0x00 ... 00       │0x04│  data_in  (640 bits) + hdr │
   └──────┴───────────────────────┴────┴────────────────────────────┘
 
-  32-byte input (data_80byte = 0):
+  32-byte input (DATA_80BYTE = 0):
   1087                                 287  279                    0
   ┌──────┬─────────────────────────────┬────┬──────────────────────┐
   │ 0x80 │        0x00 ... 00          │0x04│   data_in[255:0]     │
