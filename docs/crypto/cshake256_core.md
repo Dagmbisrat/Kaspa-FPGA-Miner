@@ -44,16 +44,16 @@ selector.
 ### Ports
 
 ```
-┌─────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────┐
 │  cshake256_pipelined_core #(NUM_STAGES)                  │
-│                                                         │
+│                                                          │
 │   clk         ───►                 ───► hash_out [255:0] │
 │   rst         ───►                 ───► valid_out        │
-│   data_in [639:0] ───►                                  │
-│   data_80byte ───►                                      │
-│   s_value     ───►                                      │
-│   valid_in    ───►                                      │
-└─────────────────────────────────────────────────────────┘
+│   data_in [639:0] ───►                                   │ 
+│   data_80byte ───►                                       │
+│   s_value     ───►                                       │
+│   valid_in    ───►                                       │
+└──────────────────────────────────────────────────────────┘
 ```
 
 | Port          | Dir | Width | Description                                              |
@@ -78,10 +78,10 @@ The datapath is a straight feed-forward pipeline — no feedback, no FSM:
 
 ```
               stage 0            stage 1                 NUM_STAGES Keccak layers
-          ┌───────────┐     ┌───────────────┐     ┌────────────────────────────────┐
+          ┌───────────┐     ┌───────────────┐     ┌────────────────────────────────────┐
  data_in─►│ Encode Msg│─pr0►│ XOR into      │─pr1►│ [R rounds]─►reg ... [R rounds]─►reg├─► hash_out
- valid_in ┊(comb)     ┊     ┊ SpongeState   ┊     ┊  kstate[0]        kstate[N-1]     ┊   valid_out
-          └───────────┘     └───────────────┘     └────────────────────────────────┘
+ valid_in ┊(comb)     ┊     ┊ SpongeState   ┊     ┊  kstate[0]        kstate[N-1]      ┊   valid_out
+          └───────────┘     └───────────────┘     └────────────────────────────────────┘
                               ▲ SPONGE_POW / SPONGE_HH        R = ROUNDS_PER_STAGE = 24/NUM_STAGES
 ```
 
