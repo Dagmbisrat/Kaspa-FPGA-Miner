@@ -7,19 +7,17 @@
 //
 //   result[i] = ( sum_{j=0..63} M[i][j] * v[j] ) >> 10     (4-bit nibble)
 //
-// Design (mirrors the cSHAKE feed-forward pipeline):
-//   * The 64x64 nibble matrix is CONSTANT for every nonce in a block, so it is
-//     loaded once into internal flops (same write interface as matrix_cache),
-//     then vectors stream through at 1/cycle.
-//   * The 64-term dot product for all 64 rows is computed in parallel and its
-//     summation is pipelined across NUM_STAGES register layers. Stage s adds
-//     the contribution of its COLS_PER_STAGE columns to the accumulator that
-//     flows down the pipe (segmented accumulation).
-//   * Total 4x4 multipliers = 64*64 = 4096 regardless of NUM_STAGES, just as
-//     cSHAKE keeps 24 Keccak round instances regardless of NUM_STAGES.
+// Matrix source is selected at compile time by INTERNAL_MATRIX:
+//   * INTERNAL_MATRIX = 1 (default, for standalone TB): the 64x64 matrix is
+//     stored in internal flops and loaded via the wr_matrix_* write port
+//     (same layout as matrix_cache).
+//   * INTERNAL_MATRIX = 0 (for in-core IP build): NO internal storage — the
+//     matrix is taken combinationally from matrix_in, wired straight from the
+//     widened matrix_cache (matrix_flat). The write port is unused.
 //
-// NUM_STAGES trades Fmax (shorter combinational adder chain) against latency
-// and register count. Throughput is always 1 vector/cycle after LAT-cycle fill.
+// The 64-term dot product for all 64 rows is computed in parallel and its
+// summation is pipelined across NUM_STAGES register layers (segmented
+// accumulation). Throughput is always 1 vector/cycle after LAT-cycle fill.
 //
 //   NUM_STAGES = 1   -> 64 cols/stage : lowest Fmax, LAT = 1, fewest regs
 //   NUM_STAGES = 64  ->  1 col/stage  : highest Fmax, LAT = 64, most regs
@@ -27,19 +25,26 @@
 //
 // Nibble conventions match matrix_cache / gen_vectors.py:
 //   * Matrix element M[i][j] is stored plainly at matrix[i][j].
+//     matrix_in packing: matrix_in[(i*64 + j)*4 +: 4] = M[i][j]  (matches
+//     matrix_cache.matrix_flat).
 //   * Vector element for column j is read from vector_in[(j^1)*4 +: 4].
 //   * Output element i is written to product_out[(i^1)*4 +: 4].
 // ===========================================================================
 module matmul_pipelined_unit #(
-    parameter int NUM_STAGES = 8   // pipeline register layers; must divide 64
+    parameter int NUM_STAGES     = 8,  // pipeline register layers; must divide 64
+    parameter bit INTERNAL_MATRIX = 1  // 1: internal flops + write port (TB)
+                                       // 0: matrix wired from matrix_in (IP)
 ) (
     input  logic         clk,
     input  logic         rst,
 
-    // ---- Matrix load (once per block; same layout as matrix_cache write) ----
+    // ---- Matrix load (INTERNAL_MATRIX=1 only; same layout as matrix_cache) --
     input  logic         wr_matrix_en,
     input  logic [7:0]   n16th_value,    // [7:2] = row, [1:0] = 16-element group
     input  logic [63:0]  wr_matrix_data, // 16 nibbles for the addressed group
+
+    // ---- Wired matrix input (INTERNAL_MATRIX=0 only; from matrix_flat) ------
+    input  logic [16383:0] matrix_in,    // matrix_in[(i*64+j)*4 +: 4] = M[i][j]
 
     // ---- Streaming vector interface (feed-forward, 1 vector/cycle) ----
     input  logic [255:0] vector_in,      // 64 x 4-bit nibbles (swapped packing)
@@ -61,21 +66,32 @@ module matmul_pipelined_unit #(
     end
 
     // -----------------------------------------------------------------------
-    // Matrix storage (constant per block). Written exactly like matrix_cache.
+    // Matrix source: internal flops (write port) or wired-in (matrix_in).
     // -----------------------------------------------------------------------
     logic [3:0] matrix [0:N-1][0:N-1];
 
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst) begin
-            for (int i = 0; i < N; i++)
-                for (int j = 0; j < N; j++)
-                    matrix[i][j] <= '0;
-        end else if (wr_matrix_en) begin
-            for (int k = 0; k < 16; k++)
-                matrix[n16th_value >> 2][(n16th_value % 4) * 16 + k]
-                    <= wr_matrix_data[k*4 +: 4];
+    generate
+        if (INTERNAL_MATRIX) begin : g_matrix_internal
+            // Stored in flops, written exactly like matrix_cache.
+            always_ff @(posedge clk or posedge rst) begin
+                if (rst) begin
+                    for (int i = 0; i < N; i++)
+                        for (int j = 0; j < N; j++)
+                            matrix[i][j] <= '0;
+                end else if (wr_matrix_en) begin
+                    for (int k = 0; k < 16; k++)
+                        matrix[n16th_value >> 2][(n16th_value % 4) * 16 + k]
+                            <= wr_matrix_data[k*4 +: 4];
+                end
+            end
+        end else begin : g_matrix_wired
+            // No storage: combinational tap from the widened cache.
+            always_comb
+                for (int i = 0; i < N; i++)
+                    for (int j = 0; j < N; j++)
+                        matrix[i][j] = matrix_in[(i*N + j)*4 +: 4];
         end
-    end
+    endgenerate
 
     // -----------------------------------------------------------------------
     // Pipeline state: one accumulator layer and one vector copy per stage.

@@ -9,11 +9,15 @@ module matrix_cache (
     input  logic [63:0]   wr_matrix_data,
     input  logic [255:0]  wr_PrePowHash,
 
-    // Read interface
+    // Read interface (registered, 1-row/cycle) — used by matrix_generator
     input  logic          rd_en,
     input  logic [5:0]    rd_row,
     output logic [255:0]  rd_row_data,
-    output logic [255:0]  rd_PrePowHash
+    output logic [255:0]  rd_PrePowHash,
+
+    // Parallel full-matrix read (combinational) — used by the streaming matmul.
+    // Packing: matrix_flat[(r*64 + c)*4 +: 4] = matrix[r][c]
+    output logic [16383:0] matrix_flat
 );
 
   logic [3:0] matrix [64][64];
@@ -44,5 +48,13 @@ module matrix_cache (
         rd_PrePowHash <= PrePowHash;
     end
   end
+
+  // Parallel matrix tap: every element exposed at once for the pipelined matmul.
+  genvar gr, gc;
+  generate
+    for (gr = 0; gr < 64; gr++)
+      for (gc = 0; gc < 64; gc++)
+        assign matrix_flat[(gr*64 + gc)*4 +: 4] = matrix[gr][gc];
+  endgenerate
 
 endmodule

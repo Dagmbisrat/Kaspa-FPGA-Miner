@@ -7,11 +7,12 @@
 // results with the KHeavyHash Python reference (_matrix_vector_multiply) — so
 // the RTL is checked against the same math as the production miner.
 //
-// Proves:
-//   1. Correctness vs the Python reference (sim/expected_vectors.mem).
-//   2. Sustained 1 result/cycle throughput: NUM_VEC vectors streamed with
-//      valid_in high every cycle produce NUM_VEC contiguous valid_out pulses,
-//      LAT cycles behind the input stream.
+// Two build modes (compile-time), selected by USE_WIRED:
+//   USE_WIRED = 0 : DUT uses internal matrix flops, loaded via the write port
+//                   (INTERNAL_MATRIX=1). This is the standalone unit test.
+//   USE_WIRED = 1 : DUT takes the matrix combinationally from matrix_in
+//                   (INTERNAL_MATRIX=0), mimicking the widened-cache wiring.
+// Both modes must produce identical, reference-correct results.
 //
 // expected_vectors.mem layout (256-bit words):
 //   64 words       : matrix rows,   plain packing   nibble c   = M[row][c]
@@ -22,6 +23,7 @@ module matmul_pipelined_tb;
 
     parameter int NUM_STAGES = 8;             // must divide 64
     parameter int NUM_VEC    = 64;            // must match gen_vectors.py
+    parameter bit USE_WIRED  = 0;             // 0: internal flops, 1: wired matrix_in
     localparam int LAT       = NUM_STAGES;    // must match the DUT
     localparam int N         = 64;
     localparam int MEM_WORDS = N + 2*NUM_VEC;
@@ -32,20 +34,25 @@ module matmul_pipelined_tb;
     always #5 clk = ~clk;
 
     // -- DUT signals -----------------------------------------------------------
-    logic         wr_matrix_en;
-    logic [7:0]   n16th_value;
-    logic [63:0]  wr_matrix_data;
-    logic [255:0] vector_in;
-    logic         valid_in;
-    logic [255:0] product_out;
-    logic         valid_out;
+    logic          wr_matrix_en;
+    logic [7:0]    n16th_value;
+    logic [63:0]   wr_matrix_data;
+    logic [16383:0] matrix_bus;               // wired-matrix input (packed)
+    logic [255:0]  vector_in;
+    logic          valid_in;
+    logic [255:0]  product_out;
+    logic          valid_out;
 
-    matmul_pipelined_unit #(.NUM_STAGES(NUM_STAGES)) dut (
+    matmul_pipelined_unit #(
+        .NUM_STAGES      (NUM_STAGES),
+        .INTERNAL_MATRIX (!USE_WIRED)
+    ) dut (
         .clk            (clk),
         .rst            (rst),
         .wr_matrix_en   (wr_matrix_en),
         .n16th_value    (n16th_value),
         .wr_matrix_data (wr_matrix_data),
+        .matrix_in      (matrix_bus),
         .vector_in      (vector_in),
         .valid_in       (valid_in),
         .product_out    (product_out),
@@ -58,7 +65,13 @@ module matmul_pipelined_tb;
     logic [255:0] vec_q     [0:NUM_VEC-1];
     logic [255:0] exp_q     [0:NUM_VEC-1];
 
-    // Load tb_matrix into the DUT (4 groups x 64 rows = 256 writes).
+    // Packed wired-matrix bus, always driven from tb_matrix (used when USE_WIRED).
+    always_comb
+        for (int r = 0; r < 64; r++)
+            for (int c = 0; c < 64; c++)
+                matrix_bus[(r*N + c)*4 +: 4] = tb_matrix[r][c];
+
+    // Load tb_matrix into the DUT's internal flops (write-port path).
     task automatic load_matrix();
         for (int r = 0; r < 64; r++) begin
             for (int g = 0; g < 4; g++) begin
@@ -119,7 +132,10 @@ module matmul_pipelined_tb;
         #1 rst = 0;
         @(posedge clk);
 
-        load_matrix();
+        // Internal mode: burst the matrix through the write port.
+        // Wired mode: matrix_bus already presents the whole matrix combinationally.
+        if (!USE_WIRED)
+            load_matrix();
 
         // Stream all vectors back-to-back, valid_in high every cycle.
         for (int v = 0; v < NUM_VEC; v++) begin
@@ -136,8 +152,8 @@ module matmul_pipelined_tb;
 
         $display("");
         $display("=================================================");
-        $display(" NUM_STAGES = %0d,  LAT = %0d,  vectors = %0d",
-                 NUM_STAGES, LAT, NUM_VEC);
+        $display(" mode = %s,  NUM_STAGES = %0d,  LAT = %0d,  vectors = %0d",
+                 USE_WIRED ? "WIRED" : "INTERNAL", NUM_STAGES, LAT, NUM_VEC);
         $display(" Received %0d result(s): %0d PASS, %0d FAIL",
                  out_idx, pass_count, fail_count);
         $display("=================================================");
