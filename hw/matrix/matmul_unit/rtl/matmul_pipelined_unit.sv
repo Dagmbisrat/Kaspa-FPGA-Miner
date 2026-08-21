@@ -19,6 +19,13 @@
 // summation is pipelined across NUM_STAGES register layers (segmented
 // accumulation). Throughput is always 1 vector/cycle after LAT-cycle fill.
 //
+// Vector forwarding is minimized: vector_in is de-swapped once into plain
+// column order, then each stage consumes its COLS_PER_STAGE columns from the
+// low nibbles and forwards ONLY the still-unused columns to the next stage.
+// The carried vector therefore shrinks by one stage's columns each layer, so
+// the total forwarding registers are the triangular sum 128*(NUM_STAGES-1)
+// bits instead of NUM_STAGES*256.
+//
 //   NUM_STAGES = 1   -> 64 cols/stage : lowest Fmax, LAT = 1, fewest regs
 //   NUM_STAGES = 64  ->  1 col/stage  : highest Fmax, LAT = 64, most regs
 //   NUM_STAGES must divide 64.
@@ -56,6 +63,7 @@ module matmul_pipelined_unit #(
 );
 
     localparam int N              = 64;
+    localparam int NIB            = 4;
     localparam int COLS_PER_STAGE = N / NUM_STAGES;
     localparam int ACC_W          = 14;  // max dot = 64*(15*15) = 14400 < 2^14
     localparam int LAT            = NUM_STAGES;
@@ -94,30 +102,44 @@ module matmul_pipelined_unit #(
     endgenerate
 
     // -----------------------------------------------------------------------
-    // Pipeline state: one accumulator layer and one vector copy per stage.
+    // De-swap vector_in into plain column packing (column j at nibble j) so a
+    // stage reads its columns from the low nibbles and forwards the remainder.
     // -----------------------------------------------------------------------
-    logic [ACC_W-1:0] acc      [0:NUM_STAGES-1][0:N-1];
-    logic [255:0]     vec_pipe [0:NUM_STAGES-1];
-    logic             valid_pipe [0:NUM_STAGES-1];
+    logic [N*NIB-1:0] vec_plain;
+    always_comb
+        for (int col = 0; col < N; col++)
+            vec_plain[col*NIB +: NIB] = vector_in[(col ^ 1)*NIB +: NIB];
+
+    // -----------------------------------------------------------------------
+    // Pipeline: one accumulator layer per stage; only the still-unused vector
+    // columns are registered and forwarded (shrinking each stage).
+    // -----------------------------------------------------------------------
+    logic [ACC_W-1:0] acc [0:NUM_STAGES-1][0:N-1];
 
     genvar st;
     generate
         for (st = 0; st < NUM_STAGES; st++) begin : g_stage
             localparam int COL_BASE = st * COLS_PER_STAGE;
+            localparam int IN_COLS  = N - st * COLS_PER_STAGE;       // input width
+            localparam int OUT_COLS = N - (st + 1) * COLS_PER_STAGE; // forwarded
 
-            logic [255:0]     vin;
-            logic [ACC_W-1:0] ain [0:N-1];
-
-            if (st == 0) begin : g_src
-                assign vin = vector_in;
-                always_comb
-                    for (int i = 0; i < N; i++) ain[i] = '0;
-            end else begin : g_src
-                assign vin = vec_pipe[st-1];
-                always_comb
-                    for (int i = 0; i < N; i++) ain[i] = acc[st-1][i];
+            // This stage's plain-packed input vector (column COL_BASE at nibble 0).
+            logic [IN_COLS*NIB-1:0] vin;
+            if (st == 0) begin : g_vin
+                assign vin = vec_plain;
+            end else begin : g_vin
+                assign vin = g_stage[st-1].g_fwd.fwd_q;
             end
 
+            // Incoming accumulator (0 at the head, previous layer otherwise).
+            logic [ACC_W-1:0] ain [0:N-1];
+            if (st == 0) begin : g_ain
+                always_comb for (int i = 0; i < N; i++) ain[i] = '0;
+            end else begin : g_ain
+                always_comb for (int i = 0; i < N; i++) ain[i] = acc[st-1][i];
+            end
+
+            // Partial dot product over this stage's COLS_PER_STAGE columns.
             logic [ACC_W-1:0] part [0:N-1];
             always_comb begin
                 for (int i = 0; i < N; i++) begin
@@ -125,27 +147,33 @@ module matmul_pipelined_unit #(
                     s = '0;
                     for (int c = 0; c < COLS_PER_STAGE; c++) begin
                         automatic int col = COL_BASE + c;
-                        s = s + ACC_W'(matrix[i][col]
-                                       * vin[(col ^ 1)*4 +: 4]);
+                        s = s + ACC_W'(matrix[i][col] * vin[c*NIB +: NIB]);
                     end
                     part[i] = s;
                 end
             end
 
+            // Accumulator register.
             always_ff @(posedge clk or posedge rst) begin
-                if (rst) begin
-                    vec_pipe[st] <= '0;
+                if (rst)
                     for (int i = 0; i < N; i++) acc[st][i] <= '0;
-                end else begin
-                    vec_pipe[st] <= vin;
-                    for (int i = 0; i < N; i++)
-                        acc[st][i] <= ain[i] + part[i];
+                else
+                    for (int i = 0; i < N; i++) acc[st][i] <= ain[i] + part[i];
+            end
+
+            // Forward only the columns the downstream stages still need.
+            if (OUT_COLS > 0) begin : g_fwd
+                logic [OUT_COLS*NIB-1:0] fwd_q;
+                always_ff @(posedge clk or posedge rst) begin
+                    if (rst) fwd_q <= '0;
+                    else     fwd_q <= vin[COLS_PER_STAGE*NIB +: OUT_COLS*NIB];
                 end
             end
         end
     endgenerate
 
     // Valid pipeline (array-based shift so NUM_STAGES == 1 is legal).
+    logic valid_pipe [0:NUM_STAGES-1];
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             for (int s = 0; s < NUM_STAGES; s++) valid_pipe[s] <= 1'b0;
