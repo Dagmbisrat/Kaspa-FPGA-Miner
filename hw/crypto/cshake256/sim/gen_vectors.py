@@ -4,17 +4,13 @@ Generate test vectors for cshake256_pipelined_core.
 
 Hash computation
 ---------------
-The hardware stage0 block is:
-    left_encode(bitlen(X)) || X || 0x04 || zeros || 0x80
+The hardware stage0 block is standard cSHAKE256:
+    X || 0x04 || zeros || 0x80
 
-So to match the hardware we pre-encode X before passing it to the reference
-cSHAKE implementation (which absorbs its data argument raw):
+The message X is absorbed raw (no length prefix), so the reference is called
+directly on X:
 
-    encoded = left_encode(bitlen(X)) + X
-    hash    = _cshake256_myImplimentaion(encoded, 32, "", S)
-
-This is equivalent to the NIST encode_string(X) wrapping and matches
-what the RTL sponge constants (SPONGE_POW / SPONGE_HH) were derived for.
+    hash = _cshake256_myImplimentaion(X, 32, "", S)
 
 Vector file layout (16 tests total):
   Words   0 – 119 : 8 HeavyHash tests      (s_value=1, 32-byte input)
@@ -93,15 +89,8 @@ def left_encode(value: int) -> bytes:
 
 
 def cshake256_hash(s_val: int, data: bytes) -> bytes:
-    """
-    Compute the hash exactly as the RTL does.
-
-    Stage0 places left_encode(bitlen(data)) before the raw bytes, so we
-    pre-encode here before handing off to the reference implementation which
-    absorbs its data argument raw (no length prefix of its own).
-    """
-    encoded = left_encode(len(data) * 8) + data   # = encode_string(data)
-    return _KH._cshake256_myImplimentaion(encoded, 32, "", S_NAMES[s_val])
+    """Standard cSHAKE256 over the raw message (matches the RTL stage0)."""
+    return _KH._cshake256_myImplimentaion(data, 32, "", S_NAMES[s_val])
 
 
 def bytes_to_lanes(b: bytes, num_lanes: int) -> list[int]:

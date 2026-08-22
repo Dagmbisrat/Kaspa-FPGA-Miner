@@ -65,23 +65,17 @@ logic [RATE_BITS-1:0] stage0_comb;
 always_comb begin
     stage0_comb = '0;
 
+    // Standard cSHAKE256: absorb the message X raw (no left_encode), then the
+    // cSHAKE domain byte 0x04 and the pad10*1 final bit 0x80 in byte 135.
     if (DATA_80BYTE) begin
-        // left_encode(640) = 0x02, 0x02, 0x80
-        stage0_comb[7:0]       = 8'h02;
-        stage0_comb[15:8]      = 8'h02;
-        stage0_comb[23:16]     = 8'h80;
-        stage0_comb[663:24]    = data_in;        // 80 bytes of msg (640 bits)
-        stage0_comb[671:664]   = 8'h04;          // domain separator at byte 83
-        // bytes 84-134 already zero
+        stage0_comb[639:0]     = data_in;        // 80 bytes of msg (640 bits)
+        stage0_comb[647:640]   = 8'h04;          // cSHAKE domain separator at byte 80
+        // bytes 81-134 already zero
         stage0_comb[1087:1080] = 8'h80;          // final bit marker at byte 135
     end else begin
-        // left_encode(256) = 0x02, 0x01, 0x00
-        stage0_comb[7:0]       = 8'h02;
-        stage0_comb[15:8]      = 8'h01;
-        stage0_comb[23:16]     = 8'h00;
-        stage0_comb[279:24]    = data_in[255:0]; // 32 bytes of msg (256 bits)
-        stage0_comb[287:280]   = 8'h04;          // domain separator at byte 35
-        // bytes 36-134 already zero
+        stage0_comb[255:0]     = data_in[255:0]; // 32 bytes of msg (256 bits)
+        stage0_comb[263:256]   = 8'h04;          // cSHAKE domain separator at byte 32
+        // bytes 33-134 already zero
         stage0_comb[1087:1080] = 8'h80;          // final bit marker at byte 135
     end
 end
