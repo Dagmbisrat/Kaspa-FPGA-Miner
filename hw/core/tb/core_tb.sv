@@ -14,6 +14,9 @@
 // ===========================================================================
 module core_tb;
 
+    parameter int CSHAKE_STAGES = 24;   // forwarded to the DUT (override via -G)
+    parameter int MATMUL_STAGES = 8;
+
     localparam int NVEC       = 32;
     localparam int NUM_PHASES = 3;
     localparam int WPH        = 6 + NVEC*4;      // 64-bit words per phase
@@ -29,7 +32,10 @@ module core_tb;
     logic [63:0]  nonce_out;
     logic         valid_out;
 
-    core uut (
+    core #(
+        .CSHAKE_STAGES (CSHAKE_STAGES),
+        .MATMUL_STAGES (MATMUL_STAGES)
+    ) uut (
         .clk          (clk),
         .rst          (rst),
         .start        (start),

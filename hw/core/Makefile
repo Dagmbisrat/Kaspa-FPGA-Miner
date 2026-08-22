@@ -10,7 +10,9 @@ XOSHIRO  = ../utils/xoshiro256pp
 MATGEN   = ../matrix/matrix_generator
 MATMUL   = ../matrix/matmul_unit
 
-JOBS ?= 4
+JOBS          ?= 4
+CSHAKE_STAGES ?= 24    # cSHAKE pipeline layers; must divide 24
+MATMUL_STAGES ?= 8     # matmul pipeline layers; must divide 64
 
 SRC = \
     $(KECCAK)/rtl/keccak_round.sv \
@@ -29,10 +31,16 @@ TB = tb/core_tb.sv
 
 help:
 	@echo "Targets:"
+	@echo "  make all       - Alias for runtest"
 	@echo "  make runtest   - Generate vectors, build, and run the core TB"
 	@echo "  make vectors   - Regenerate test vectors from the Python reference"
 	@echo "  make wave      - Run the TB and open the waveform in GTKWave"
 	@echo "  make clean     - Remove build dir, waveform, and vectors"
+	@echo ""
+	@echo "Variables (make TARGET VAR=value):"
+	@echo "  CSHAKE_STAGES=$(CSHAKE_STAGES)  - cSHAKE pipeline depth, must divide 24"
+	@echo "  MATMUL_STAGES=$(MATMUL_STAGES)   - matmul pipeline depth, must divide 64"
+	@echo "  JOBS=$(JOBS)          - Parallel Verilator / C++ build jobs"
 
 all: runtest
 
@@ -42,7 +50,9 @@ $(VECTORS): sim/gen_vectors.py
 vectors: $(VECTORS)
 
 runtest: $(VECTORS)
-	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal --top-module $(TOP) --Mdir $(OBJDIR) $(SRC) $(TB)
+	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal --top-module $(TOP) \
+		  -GCSHAKE_STAGES=$(CSHAKE_STAGES) -GMATMUL_STAGES=$(MATMUL_STAGES) \
+		  --Mdir $(OBJDIR) $(SRC) $(TB)
 	$(OBJDIR)/V$(TOP)
 
 wave: runtest
