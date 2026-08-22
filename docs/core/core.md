@@ -4,98 +4,122 @@
 
 ## Overview
 
-`core` is the top-level kHeavyHash mining engine. It sequences four sub-modules across a four-stage pipeline to compute a single hash from `pre_pow_hash`, `timestamp`, and `nonce`. The matrix generation and first cSHAKE run are fully parallel in STAGE1, minimising latency per hash.
+`core` is the top-level kHeavyHash mining engine, built as a **streaming
+pipeline**: given a block (`pre_pow_hash`, `timestamp`, starting `nonce`), it
+sweeps nonces and emits **one finished hash per clock cycle**, each tagged with
+the nonce that produced it.
 
----
-
-## Port List
-
-| Port           | Dir | Width | Description                                 |
-|:-------------- |:---:|:-----:|:------------------------------------------- |
-| `clk`          | in  | 1     | Clock                                       |
-| `rst`          | in  | 1     | Async reset                                 |
-| `start`        | in  | 1     | Begin hashing (held for one cycle)          |
-| `pre_pow_hash` | in  | 256   | Block header hash — seeds the matrix        |
-| `timestamp`    | in  | 64    | UNIX timestamp (little-endian uint64)       |
-| `nonce`        | in  | 64    | Mining nonce (little-endian uint64)         |
-| `hash_out`     | out | 256   | Final 32-byte kHeavyHash result             |
-| `done`         | out | 1     | High for one cycle when `hash_out` is valid |
-
----
-
-## State Diagram
+The 64×64 matrix is **constant per block**, so it is generated once (blocking)
+and then held in the cache while nonces stream through a feed-forward chain of
+three 1-result/cycle IPs:
 
 ```
-              start = 1
-                  │
-                  ▼
-       ┌──────────────────┐
-       │       IDLE       │◄───────────────────────────────────────┐
-       │   latch header   │                                        │
-       └────────┬─────────┘                                        │ done = 1
-                │                                                  │
-                ▼                                        ┌─────────┴────────┐
-┌───────────────────────────────────────────────┐        │       DONE       │
-│  STAGE 1                                      │        │    hash_out      │
-│                                               │        │    valid         │
-│  ┌────────────────────┐ ┌───────────────────┐ │        └─────────▲────────┘
-│  │  matrix_generator  │ │   cshake256_core  │ │                  │
-│  │  ─────────────── ──│ │  ─────────────── ─│ │                  │
-│  │  xoshiro256++      │ │  s="ProofOfWork   │ │                  │
-│  │  rank check        │ │    Hash"          │ │                  │
-│  │                    │ │  80-byte header   │ │                  │
-│  │       │ wr         │ │                   │ │                  │
-│  │       ▼            │ │  pow_hash latched │ │                  │
-│  │  ┌──────────────┐  │ │  on done ─────►   │ │                  │
-│  │  │ matrix_cache │  │ │   pow_hash_reg    │ │                  │
-│  │  └──────────────┘  │ └───────────────────┘ │                  │
-│  └────────────────────┘                       │                  │
-│matrix_gen_complete_reg && cshake_complete_reg │                  │
-└───────────────────────┬───────────────────────┘                  │
-                        │                                          │
-                        ▼                                          │
-┌───────────────────────────────────────────────┐                  │
-│  STAGE 2                                      │                  │
-│                                               │                  │
-│  ┌────────────────────────────────────────┐   │                  │
-│  │            matmul_unit                 │   │                  │
-│  │  ────────────────────────────────────  │   │                  │
-│  │  matrix_cache rd ──► matrix × vector   │   │                  │
-│  │  (pow_hash_reg, 64 nibbles, 66 cycles) │   │                  │
-│  │                                        │   │                  │
-│  │  product latched on done ──►           │   │                  │
-│  │    matrix_mul_product_out_reg          │   │                  │
-│  └────────────────────────────────────────┘   │                  │
-└───────────────────────┬───────────────────────┘                  │
-                        │ matrix_mul_done                          │
-                        ▼                                          │
-┌───────────────────────────────────────────────┐                  │
-│  STAGE 3                                      │                  │
-│                                               │                  │
-│  ┌────────────────────────────────────────┐   │                  │
-│  │           cshake256_core               │   │                  │
-│  │  ────────────────────────────────────  │   │                  │
-│  │  s="HeavyHash"                         │   │                  │
-│  │  32-byte (product XOR pow_hash_reg)    │   │                  │
-│  │                                        │   │                  │
-│  │  hash_out latched on done              │   │                  │
-│  └────────────────────────────────────────┘   │                  │
-└───────────────────────┬───────────────────────┘                  │
-                        │ cshake_done                              │
-                        └──────────────────────────────────────────┘
+  nonce++ ─► cshake1 ─► matmul ─► XOR(pow_hash) ─► cshake2 ─► hash_out
+            (POW,80B)   (matrix)                  (HH,32B)     + nonce_out
 ```
+
+This replaces the earlier per-nonce sequential FSM: matrix generation is
+amortised across the whole block, and after the fill latency the pipeline
+sustains 1 nonce/cycle.
 
 ---
 
-## Pipeline Stages
+## Ports & Parameters
 
-| State    | Work                                                                                | Advances When                                                |
-|:-------- |:----------------------------------------------------------------------------------- |:------------------------------------------------------------ |
-| `IDLE`   | Latch header; arm starts for STAGE1                                                 | `start = 1`                                                  |
-| `STAGE1` | MatrixGen (from `pre_pow_hash`) \|\| cSHAKE256("ProofOfWorkHash") on 80-byte header | Both `matrix_gen_complete_reg` and `cshake_complete_reg` set |
-| `STAGE2` | matmul: cached matrix × vector (64 nibbles from `pow_hash_reg`)                     | `matrix_mul_done`                                            |
-| `STAGE3` | cSHAKE256("HeavyHash") on `product XOR pow_hash`                                    | `cshake_done`                                                |
-| `DONE`   | Assert `done` for one cycle                                                         | Immediately (returns to IDLE)                                |
+### Parameters
+
+| Parameter       | Default | Description                                        |
+|:--------------- |:-------:|:-------------------------------------------------- |
+| `CSHAKE_STAGES` | 24      | cSHAKE pipeline layers (both cores). Must divide 24.|
+| `MATMUL_STAGES` | 8       | matmul pipeline layers. Must divide 64.            |
+
+### Ports
+
+| Port           | Dir | Width | Description                                      |
+|:-------------- |:---:|:-----:|:------------------------------------------------ |
+| `clk`          | in  | 1     | Clock                                            |
+| `rst`          | in  | 1     | Async reset                                      |
+| `start`        | in  | 1     | Pulse to load a block and begin streaming        |
+| `pre_pow_hash` | in  | 256   | Block header hash — matrix seed, stable per block |
+| `timestamp`    | in  | 64    | UNIX timestamp (little-endian uint64)            |
+| `nonce`        | in  | 64    | Starting nonce for the stream                    |
+| `hash_out`     | out | 256   | Streamed 32-byte kHeavyHash result               |
+| `nonce_out`    | out | 64    | Nonce that produced the current `hash_out`       |
+| `valid_out`    | out | 1     | High on the cycle `hash_out`/`nonce_out` are valid|
+
+> There is no per-nonce `start`/`done` handshake on the datapath. Each IP's
+> `valid_out` feeds the next IP's `valid_in`, so validity flows automatically.
+
+---
+
+## Two-Phase Control
+
+The core tracks `pph_reg` — the pph the cached matrix was built for — and
+compares the incoming `pre_pow_hash` against it (a combinational, non-blocking
+check).
+
+```
+          start
+            │
+   ┌────────▼──────────┐  pre_pow_hash == pph_reg
+   │  load block regs  │──────────────────────────► STREAM
+   │  (pph,ts,nonce)   │  (matrix already cached)
+   └────────┬──────────┘
+            │ pre_pow_hash != pph_reg (new block)
+            ▼
+   ┌───────────────────┐  matrix_generator done
+   │       GEN         │──────────────────────────► STREAM
+   │  (blocking regen) │
+   └───────────────────┘
+```
+
+- **GEN** — pulse `matrix_gen_start`, hold `valid_in = 0`, wait for a *fresh*
+  generator completion, then update `pph_reg` and stream.
+- **STREAM** — free-run `nonce_ctr`, assert `valid_in` every cycle. Stays here
+  streaming; a new `start` reloads and repeats the decision.
+
+Matrix (re)generation therefore happens **only on a new block**; identical
+`pre_pow_hash` re-uses the cached matrix and streams immediately.
+
+> **`gen_ack`**: `matrix_generator.done` is a *level* that stays high after the
+> first generation, not a pulse. The FSM waits for `done` to go **low then high**
+> (`gen_ack`) so a block switch cannot mistake the stale-high level for a fresh
+> completion and stream before the new matrix is ready.
+
+---
+
+## Streaming Datapath
+
+Every STREAM cycle:
+
+| Step | Block | Detail |
+|:---- |:----- |:------ |
+| 1 | header | `{nonce_ctr, 256'b0, timestamp, pre_pow_hash}` (80 bytes) |
+| 2 | **cSHAKE1** | `S_VALUE=0` (ProofOfWorkHash), 80-byte → `pow_hash` |
+| 3 | vector | `vector_in = pow_hash` directly (nibble packing matches) |
+| 4 | **matmul** | `INTERNAL_MATRIX=0`, reads whole matrix from cache `matrix_flat` → `product` |
+| 5 | XOR | `digest = product ^ pow_hash` (`pow_hash` delayed by the matmul latency) |
+| 6 | **cSHAKE2** | `S_VALUE=1` (HeavyHash), 32-byte digest → `hash_out` |
+
+The matmul reads the matrix **combinationally in parallel** (all 64×64 nibbles)
+from the widened `matrix_cache.matrix_flat`, because a 1-vector/cycle multiply
+cannot use the cache's one-row-per-cycle read port.
+
+### pow_hash alignment for the XOR
+
+`pow_hash` is both the matmul vector and (per kHeavyHash) the XOR operand for the
+digest. Since the matmul adds `M_LAT = MATMUL_STAGES` cycles, `pow_hash` is
+delayed by `M_LAT` in a shift register so nonce N's product meets nonce N's
+`pow_hash`.
+
+### Nonce tagging
+
+The hash carries no nonce, so `nonce_ctr` is shifted down a delay line matched to
+the full pipeline latency and presented as `nonce_out`, aligned with `hash_out`:
+
+```
+  TOTAL_LAT = C_LAT + M_LAT + C_LAT ,  C_LAT = CSHAKE_STAGES + 2 ,  M_LAT = MATMUL_STAGES
+```
 
 ---
 
@@ -103,49 +127,61 @@
 
 ```
   core
-  ├── matrix_cache       (64×64 nibble store + PrePowHash tag)
-  ├── matrix_generator   (xoshiro256++ PRNG + rank check)
-  ├── matmul_unit        (matrix × vector, 66 cycles)
-  └── cshake256_core     (shared between STAGE1 and STAGE3)
+  ├── matrix_cache             (64×64 nibble store + PrePowHash tag + matrix_flat)
+  ├── matrix_generator         (xoshiro256++ PRNG + rank check; blocking, per block)
+  ├── cshake256_pipelined_core (Cshake1: S=0/80B) ─► pow_hash
+  ├── matmul_pipelined_unit    (INTERNAL_MATRIX=0, matrix_in = matrix_flat)
+  └── cshake256_pipelined_core (Cshake2: S=1/32B) ─► hash_out
+```
+
+The cache write port is driven only by the generator; its one-row read port is
+used only by the generator's rank check. The matmul reads the parallel
+`matrix_flat` tap, so there is no read-port contention during streaming.
+
+---
+
+## Nibble Conventions
+
+The kHeavyHash nibble packing lines up so no explicit conversion is needed:
+
+```
+  vector_in = pow_hash                       (matmul swapped packing matches byte->nibble)
+  digest    = product_out ^ pow_hash         (plain 256-bit XOR)
+  header    = {nonce, 256'b0, timestamp, pre_pow_hash}
 ```
 
 ---
 
-## Key Signals
+## Not Yet Included (by design)
+
+- **Target/difficulty compare** — the core emits the full hash stream;
+  winning-nonce detection is done downstream.
+- **Block-switch drain** — a few in-flight results at a block boundary can be
+  wrong-but-harmless (no hardware hazard); they are filtered downstream.
+
+---
+
+## Verification
+
+A Verilator testbench (`tb/core_tb.sv`) drives the core from the Python reference
+`KHeavyhash.hash()` across three phases and checks every streamed `hash_out` by
+its `nonce_out`:
 
 ```
-  header_reg          — 640-bit latch: {nonce, 256'b0, timestamp, pre_pow_hash}
-  pow_hash_reg        — captures cshake_hash_out when cshake_done in STAGE1
-  matrix_mul_product_out_reg — captures product_out when matrix_mul_done in STAGE2
-
-  matrix_gen_complete_reg — set when matrix_gen_done; cleared in IDLE
-  cshake_complete_reg     — set when cshake_done in STAGE1; cleared in IDLE
+make runtest                     # gen vectors, build, run
+make runtest MATMUL_STAGES=16    # override pipeline depth (must divide 64)
+make runtest CSHAKE_STAGES=12    # override cSHAKE depth (must divide 24)
 ```
 
-### Cache Read Arbitration
+- Phase 0: fresh matrix generation (block A)
+- Phase 1: cache-hit re-use (block A, new nonce base)
+- Phase 2: block switch + regeneration (block B)
 
-`rd_en` and `rd_row` are muxed by state so only one consumer drives the cache at a time:
-
-```
-  STAGE1  →  matrix_gen_rd_en / matrix_gen_rd_row
-  STAGE2  →  matrix_mul_rd_en / matrix_mul_rd_row
-  other   →  0
-```
-
-### cSHAKE Reuse
-
-The single `cshake256_core` instance is used twice:
-
-```
-  STAGE1:  data_80byte=1, s_value=0 ("ProofOfWorkHash"), data_in=header_reg
-  STAGE3:  data_80byte=0, s_value=1 ("HeavyHash"),       data_in={384'b0, product XOR pow_hash}
-```
-
-The core's INIT state zeroes the Keccak state before each use, so no flush logic is needed between stages.
+All 96 streamed hashes match the reference at 1 nonce/cycle.
 
 ---
 
 ## References
 
-- **Companion docs** — [cSHAKE256 Core](../crypto/cshake256_core.md) | [matrix_generator](../matrix/matrix_generator.md) | [kHeavyHash Algorithm](../KHeavyhash.md)
+- **Companion docs** — [cSHAKE256 Core](../crypto/cshake256_core.md) | [matmul_pipelined_unit](../matrix/matmul_pipelined_unit.md) | [matrix_generator](../matrix/matrix_generator.md) | [kHeavyHash Algorithm](../KHeavyhash.md)
 - **kHeavyHash** — https://github.com/bcutil/kheavyhash

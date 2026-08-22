@@ -178,33 +178,40 @@ The two resulting post-prefix states are stored as `SPONGE_POW[0:24]` and
 
 ### Message Block Encoding (Stage 0)
 
-Stage 0 builds the second (data) rate block combinationally into `pr0`, with the
-`0x04` cSHAKE domain-separation byte placed just past the message and the final
-pad bit `0x80` in the top rate byte:
+Stage 0 builds the second (data) rate block combinationally into `pr0`. Standard
+cSHAKE absorbs the message **raw** (no length prefix); the `0x04` cSHAKE domain
+byte sits immediately past the message and the final pad bit `0x80` occupies the
+top rate byte:
 
 ```
   80-byte input (DATA_80BYTE = 1):
-  1087                           671  663                          0
+  1087                           647 639                          0
   ┌──────┬───────────────────────┬────┬────────────────────────────┐
-  │ 0x80 │     0x00 ... 00       │0x04│  data_in  (640 bits) + hdr │
+  │ 0x80 │     0x00 ... 00       │0x04│      data_in (640 bits)    │
   └──────┴───────────────────────┴────┴────────────────────────────┘
 
   32-byte input (DATA_80BYTE = 0):
-  1087                                 287  279                    0
+  1087                                 263 255                    0
   ┌──────┬─────────────────────────────┬────┬──────────────────────┐
-  │ 0x80 │        0x00 ... 00          │0x04│   data_in[255:0]     │
+  │ 0x80 │        0x00 ... 00          │0x04│     data_in[255:0]   │
   └──────┴─────────────────────────────┴────┴──────────────────────┘
      ▲                                    ▲
      │  final Keccak pad bit              │  cSHAKE padding byte
      │  (high bit of last rate byte)      │  (0x04, NOT 0x1F → cSHAKE not SHAKE)
 ```
 
-The low bytes hold `left_encode(bit_len)` (`0x02 0x02 0x80` for 640 bits, or
-`0x02 0x01 0x00` for 256 bits) followed by the message. Remaining bits default to
-zero, so `bytepad` needs no extra logic.
+The message occupies the low bytes starting at bit 0, then the `0x04` domain
+byte, with the rest zero — matching NIST cSHAKE256, which does **not** length-
+prefix the data `X` (only `N` and `S` are `encode_string`-wrapped, and those are
+folded into the sponge constant).
 
 > **Critical distinction:** the `0x04` byte is what makes this **cSHAKE256** rather
 > than SHAKE256 (`0x1F`). Since `S` is never empty, this is hardcoded.
+
+> **Note (fix):** an earlier revision prepended `left_encode(bit_len)` to the
+> message (`0x02 0x02 0x80` / `0x02 0x01 0x00`) — a non-standard `encode_string(X)`
+> wrap. That was removed so the core matches standard cSHAKE / the kHeavyHash
+> reference; the `SPONGE_*` prefix constants are unaffected.
 
 ---
 
