@@ -139,7 +139,7 @@ Progress and planned work — updated as phases complete.
 - [x] Standard cSHAKE256 message encoding fix
 - [x] Analytical flip-flop usage estimate per IP (printed on `runtest`)
 - [x] Difficulty/target compare + winning-nonce output
-- [ ] Confirm hash byte-order for the 256-bit target compare against kaspad
+- [x] Confirm hash byte-order for the 256-bit target compare against kaspad (little-endian, matches)
 - [ ] Synthesis: real LUT / DSP / BRAM usage per core (yosys / Vivado)
 - [ ] Achieve ≥180 MHz timing on XC7K70T
 - [ ] Confirm fit within XC7K70T resources

@@ -199,8 +199,9 @@ module core #(
         end
     end
 
-    // Target compare (tail stage). NOTE: hash_out is compared as a raw 256-bit
-    // unsigned value; confirm the byte order against kaspad before production.
+    // Target compare (tail stage). kaspad's pow.toBig() treats the hash as
+    // little-endian, which is exactly how hash_out is packed, so the raw 256-bit
+    // hash_out <= target matches kaspad's CheckProofOfWork (no byte swap).
     wire [WID-1:0] work_out = work_delay[TOTAL_LAT-1];
     wire hit = valid_out && (work_out == work_id) && (hash_out <= tgt_reg);
     always_ff @(posedge clk or posedge rst) begin
