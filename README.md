@@ -2,7 +2,7 @@
 
 An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, targeting Xilinx Kintex-7 FPGAs — starting on the **XC7K70T** for development and scaling to the **XC7K325T** for full throughput.
 
-> ⚠️ **Status:** Work in progress — streaming single core (1 nonce/cycle) verified in simulation against the Python reference; next up are synthesis/timing, difficulty compare, multi-core scaling, and the host interface.
+> ⚠️ **Status:** Work in progress — streaming single core (1 nonce/cycle) with difficulty compare verified in simulation against the Python reference; next up are synthesis/timing, the host interface, and multi-core scaling.
 
 ---
 
@@ -138,26 +138,30 @@ Progress and planned work — updated as phases complete.
 - [x] Streaming `core` — 1 nonce/cycle pipeline (cSHAKE1 → matmul → XOR → cSHAKE2) + reference-checked TB
 - [x] Standard cSHAKE256 message encoding fix
 - [x] Analytical flip-flop usage estimate per IP (printed on `runtest`)
-- [ ] Difficulty/target compare + winning-nonce output
+- [x] Difficulty/target compare + winning-nonce output
+- [ ] Confirm hash byte-order for the 256-bit target compare against kaspad
 - [ ] Synthesis: real LUT / DSP / BRAM usage per core (yosys / Vivado)
 - [ ] Achieve ≥180 MHz timing on XC7K70T
 - [ ] Confirm fit within XC7K70T resources
 
-### Phase 2 — Multi-Core (XC7K70T)
+### Phase 2 — Host Interface
+- [ ] `work_controller` — register map (work in, found FIFO out), transport-agnostic
+- [ ] Swappable transport adapters (build-time `TRANSPORT`) — UART bring-up first
+- [ ] Register-bus testbench (verify the controller without a PHY)
+- [ ] PCIe adapter drop-in (hard block + AXI-Lite register map)
+- [ ] Host driver / software interface
+- [ ] End-to-end hashing from PC (single core)
+
+### Phase 3 — Multi-Core (XC7K70T)
+- [ ] Controller nonce-space split + result arbitration across N cores
 - [ ] 4-core stable build on XC7K70T
 - [ ] Determine routing ceiling on XC7K70T
 - [ ] Measure GH/s scaling vs core count
 
-### Phase 2b — Scale to XC7K325T
+### Phase 3b — Scale to XC7K325T
 - [ ] Port and re-close timing on XC7K325T
 - [ ] 8-core stable build on XC7K325T
-- [ ] Confirm GH/s improvement vs 160T
-
-### Phase 3 — Host Interface
-- [ ] PCIe IP integration
-- [ ] AXI register map (work distribution + result reporting)
-- [ ] Host driver / software interface
-- [ ] End-to-end hashing from PC
+- [ ] Confirm GH/s improvement vs 70T
 
 ### Phase 4 — Optimisation
 - [ ] Fmax improvement pass
