@@ -54,6 +54,7 @@ runtest: $(VECTORS)
 		  -GCSHAKE_STAGES=$(CSHAKE_STAGES) -GMATMUL_STAGES=$(MATMUL_STAGES) \
 		  --Mdir $(OBJDIR) $(SRC) $(TB)
 	$(OBJDIR)/V$(TOP)
+	@python3 ../tools/fpga_estimate.py core CSHAKE_STAGES=$(CSHAKE_STAGES) MATMUL_STAGES=$(MATMUL_STAGES)
 
 wave: runtest
 	gtkwave sim/$(TOP).vcd

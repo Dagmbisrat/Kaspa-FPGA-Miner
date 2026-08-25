@@ -47,6 +47,7 @@ $(OBJDIR)/V$(TOP): $(SRC) $(TB)
 
 runtest: $(VECTORS) $(OBJDIR)/V$(TOP)
 	$(OBJDIR)/V$(TOP)
+	@python3 ../../tools/fpga_estimate.py matrix_generator
 
 $(OBJDIR_RANK)/V$(TOP_RANK): $(RANK_SRC) $(TB_RANK)
 	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal \

@@ -42,6 +42,7 @@ $(OBJDIR)/V$(TOP): $(SRC) $(TB)
 
 runtest: vectors $(OBJDIR)/V$(TOP)
 	$(OBJDIR)/V$(TOP)
+	@python3 ../../tools/fpga_estimate.py cshake256_pipelined_core NUM_STAGES=$(NUM_STAGES)
 
 $(OBJDIR_TP)/V$(TOP_TP): $(SRC) $(TB_TP)
 	verilator --binary --timing -j $(JOBS) -Wno-fatal -GNUM_STAGES=$(NUM_STAGES) \

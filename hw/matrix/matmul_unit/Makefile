@@ -39,6 +39,7 @@ $(OBJDIR)/V$(TOP): $(SRC) $(TB)
 
 runtest: $(VECTORS) $(OBJDIR)/V$(TOP)
 	$(OBJDIR)/V$(TOP)
+	@python3 ../../tools/fpga_estimate.py matmul_pipelined_unit NUM_STAGES=$(NUM_STAGES) INTERNAL_MATRIX=1
 
 # Wired-matrix mode: matrix presented on matrix_in (INTERNAL_MATRIX=0), as in-core.
 $(WOBJDIR)/V$(TOP): $(SRC) $(TB)
@@ -48,6 +49,7 @@ $(WOBJDIR)/V$(TOP): $(SRC) $(TB)
 
 wiretest: $(VECTORS) $(WOBJDIR)/V$(TOP)
 	$(WOBJDIR)/V$(TOP)
+	@python3 ../../tools/fpga_estimate.py matmul_pipelined_unit NUM_STAGES=$(NUM_STAGES) INTERNAL_MATRIX=0
 
 wave: runtest
 	gtkwave sim/$(TOP).vcd
