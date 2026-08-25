@@ -10,6 +10,7 @@ for base_nonce + i, i in [0, NVEC).
   Word  4            : timestamp
   Word  5            : base nonce
   Words 6..6+4N-1    : NVEC expected hashes (4 lanes each, little-endian)
+  next 4 words       : difficulty target (4 lanes, little-endian)
 
 Phases (must match core_tb.sv params NVEC / NUM_PHASES):
   0: block A, fresh matrix generation
@@ -51,11 +52,19 @@ def main():
             lines.append(f"{l:016x}")
         lines.append(f"{ts:016x}")
         lines.append(f"{base:016x}")
-        for i in range(NVEC):
-            h = kh.hash(pph, ts, base + i)
+        hs = [kh.hash(pph, ts, base + i) for i in range(NVEC)]
+        for h in hs:
             for l in lanes(h, 4):
                 lines.append(f"{l:016x}")
-        print(f"phase pph={pph.hex()[:16]}... base={base} .. {base+NVEC-1}")
+        # Target = median hash so ~half the nonces pass (hash <= target).
+        # Hash is compared as a little-endian 256-bit integer (matches hash_out).
+        ints = sorted(int.from_bytes(h, "little") for h in hs)
+        target = ints[NVEC // 2]
+        for k in range(4):
+            lines.append(f"{(target >> (64 * k)) & 0xFFFFFFFFFFFFFFFF:016x}")
+        npass = sum(1 for x in ints if x <= target)
+        print(f"phase pph={pph.hex()[:16]}... base={base}..{base+NVEC-1} "
+              f"target passes {npass}/{NVEC}")
     out = os.path.join(SCRIPT_DIR, "expected_vectors.mem")
     with open(out, "w") as f:
         f.write("\n".join(lines) + "\n")

@@ -19,7 +19,7 @@ module core_tb;
 
     localparam int NVEC       = 32;
     localparam int NUM_PHASES = 3;
-    localparam int WPH        = 6 + NVEC*4;      // 64-bit words per phase
+    localparam int WPH        = 6 + NVEC*4 + 4;  // 64-bit words per phase (+ target)
     localparam int TOTAL_W    = NUM_PHASES*WPH;
 
     logic         clk = 0;
@@ -28,9 +28,13 @@ module core_tb;
     logic [255:0] pre_pow_hash;
     logic [63:0]  timestamp;
     logic [63:0]  nonce;
+    logic [255:0] target;
     logic [255:0] hash_out;
     logic [63:0]  nonce_out;
     logic         valid_out;
+    logic         found;
+    logic [63:0]  found_nonce;
+    logic [7:0]   found_work_id;
 
     core #(
         .CSHAKE_STAGES (CSHAKE_STAGES),
@@ -42,9 +46,13 @@ module core_tb;
         .pre_pow_hash (pre_pow_hash),
         .timestamp    (timestamp),
         .nonce        (nonce),
+        .target       (target),
         .hash_out     (hash_out),
         .nonce_out    (nonce_out),
-        .valid_out    (valid_out)
+        .valid_out    (valid_out),
+        .found        (found),
+        .found_nonce  (found_nonce),
+        .found_work_id(found_work_id)
     );
 
     always #5 clk = ~clk;
@@ -62,6 +70,7 @@ module core_tb;
     logic [63:0]  ph_ts   [0:NUM_PHASES-1];
     logic [63:0]  ph_base [0:NUM_PHASES-1];
     logic [255:0] ph_exp  [0:NUM_PHASES-1][0:NVEC-1];
+    logic [255:0] ph_tgt  [0:NUM_PHASES-1];
 
     integer pass_count = 0;
     integer fail_count = 0;
@@ -72,20 +81,21 @@ module core_tb;
 
     task automatic run_phase(input int p);
         logic [NVEC-1:0] got;
+        logic [NVEC-1:0] fnd;
         integer nchecked;
         integer guard;
         logic [63:0] rel;
-        int ri;
+        int ri, exp_pass, got_pass;
+        logic e;
         begin
-            got      = '0;
-            nchecked = 0;
-            guard    = 0;
+            got = '0; fnd = '0; nchecked = 0; guard = 0;
 
             @(negedge clk);
             start        = 1'b1;
             pre_pow_hash = ph_pph[p];
             timestamp    = ph_ts[p];
             nonce        = ph_base[p];
+            target       = ph_tgt[p];
             @(negedge clk);
             start        = 1'b0;
 
@@ -97,9 +107,8 @@ module core_tb;
                         ri = rel[$clog2(NVEC)-1:0];
                         got[ri] = 1'b1;
                         nchecked = nchecked + 1;
-                        if (hash_out === ph_exp[p][ri]) begin
-                            pass_count = pass_count + 1;
-                        end else begin
+                        if (hash_out === ph_exp[p][ri]) pass_count = pass_count + 1;
+                        else begin
                             fail_count = fail_count + 1;
                             $display("  FAIL phase %0d nonce %0d", p, nonce_out);
                             $display("    expected: %h", ph_exp[p][ri]);
@@ -107,14 +116,42 @@ module core_tb;
                         end
                     end
                 end
+                if (found) begin
+                    rel = found_nonce - ph_base[p];
+                    if (rel < NVEC) fnd[rel[$clog2(NVEC)-1:0]] = 1'b1;
+                end
                 guard = guard + 1;
+            end
+
+            // Drain a few cycles to catch the last 'found' pulses.
+            repeat (4) begin
+                @(posedge clk);
+                if (found) begin
+                    rel = found_nonce - ph_base[p];
+                    if (rel < NVEC) fnd[rel[$clog2(NVEC)-1:0]] = 1'b1;
+                end
+            end
+
+            // Verify the found set matches (hash <= target).
+            exp_pass = 0; got_pass = 0;
+            for (int k = 0; k < NVEC; k = k + 1) begin
+                e = (ph_exp[p][k] <= ph_tgt[p]);
+                if (e)      exp_pass = exp_pass + 1;
+                if (fnd[k]) got_pass = got_pass + 1;
+                if (e === fnd[k]) pass_count = pass_count + 1;
+                else begin
+                    fail_count = fail_count + 1;
+                    $display("  FOUND MISMATCH phase %0d nonce %0d exp=%0b got=%0b",
+                             p, ph_base[p]+k, e, fnd[k]);
+                end
             end
 
             if (nchecked < NVEC) begin
                 $display("  TIMEOUT phase %0d: only %0d/%0d results", p, nchecked, NVEC);
                 fail_count = fail_count + 1;
             end else begin
-                $display("  phase %0d done (%0d nonces)", p, NVEC);
+                $display("  phase %0d done (%0d nonces, found %0d/%0d over target)",
+                         p, NVEC, got_pass, exp_pass);
             end
         end
     endtask
@@ -133,6 +170,7 @@ module core_tb;
             ph_base[p]   = mem[off+5];
             for (i = 0; i < NVEC; i = i + 1)
                 ph_exp[p][i] = rd256(off + 6 + i*4);
+            ph_tgt[p] = rd256(off + 6 + NVEC*4);
         end
 
         rst          = 1'b1;
@@ -140,6 +178,7 @@ module core_tb;
         pre_pow_hash = '0;
         timestamp    = '0;
         nonce        = '0;
+        target       = '0;
 
         repeat (3) @(posedge clk);
         #1 rst = 1'b0;

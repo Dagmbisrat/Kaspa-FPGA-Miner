@@ -119,6 +119,7 @@ def core(args):
         ("pow_hash delay", ms * 256, "MATMUL_STAGES x 256"),
         ("nonce delay line", total_lat * 64, "TOTAL_LAT(%d) x 64" % total_lat),
         ("block/ctrl regs", 643, "pph/blk_pph/ts/nonce_ctr/state"),
+        ("target/found", total_lat * 8 + 337, "work-id delay + tgt/found regs"),
     ]
     logic = ("dominated by matmul + 2x Keccak",
              "see matmul/cSHAKE estimates; ~100-160k LUT rough total")

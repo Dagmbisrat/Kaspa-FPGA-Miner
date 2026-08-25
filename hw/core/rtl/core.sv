@@ -23,15 +23,21 @@ module core #(
     input  logic [63:0]  timestamp,     // little-endian uint64
     input  logic [63:0]  nonce,         // starting nonce for the stream
 
+    input  logic [255:0] target,        // difficulty target; hash <= target passes
+
     output logic [255:0] hash_out,      // streamed final hash
     output logic [63:0]  nonce_out,     // nonce that produced hash_out
-    output logic         valid_out      // high when hash_out/nonce_out are valid
+    output logic         valid_out,     // high when hash_out/nonce_out are valid
+    output logic         found,         // pulse: a streamed hash met the target
+    output logic [63:0]  found_nonce,   // winning nonce
+    output logic [7:0]   found_work_id  // job/work id the winning nonce belongs to
 );
 
     // ---- Pipeline latencies ----
     localparam int C_LAT     = CSHAKE_STAGES + 2;      // cSHAKE valid_in->valid_out
     localparam int M_LAT     = MATMUL_STAGES;          // matmul valid_in->valid_out
     localparam int TOTAL_LAT = C_LAT + M_LAT + C_LAT;  // cshake1 + matmul + cshake2
+    localparam int WID       = 8;                      // work/job id width
 
     // ---- Control FSM ----
     typedef enum logic [1:0] { IDLE = 2'b00, GEN = 2'b01, STREAM = 2'b10 } state_t;
@@ -43,6 +49,8 @@ module core #(
     logic [255:0] pph_reg;    // pph the cached matrix was generated for
     logic [63:0]  ts_reg;
     logic [63:0]  nonce_ctr;
+    logic [255:0] tgt_reg;      // difficulty target for the current work
+    logic [WID-1:0] work_id;    // increments per new work (job) load
 
     // ======================================================================
     // Matrix cache (widened: matrix_flat exposes the whole matrix in parallel)
@@ -179,6 +187,36 @@ module core #(
     end
     assign nonce_out = nonce_delay[TOTAL_LAT-1];
 
+    // Carry the work id alongside so a hit is attributed to the right job and
+    // stale in-flight results from a previous job are ignored.
+    logic [WID-1:0] work_delay [0:TOTAL_LAT-1];
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst)
+            for (int k = 0; k < TOTAL_LAT; k++) work_delay[k] <= '0;
+        else begin
+            work_delay[0] <= work_id;
+            for (int k = 1; k < TOTAL_LAT; k++) work_delay[k] <= work_delay[k-1];
+        end
+    end
+
+    // Target compare (tail stage). NOTE: hash_out is compared as a raw 256-bit
+    // unsigned value; confirm the byte order against kaspad before production.
+    wire [WID-1:0] work_out = work_delay[TOTAL_LAT-1];
+    wire hit = valid_out && (work_out == work_id) && (hash_out <= tgt_reg);
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst) begin
+            found         <= 1'b0;
+            found_nonce   <= '0;
+            found_work_id <= '0;
+        end else begin
+            found <= hit;
+            if (hit) begin
+                found_nonce   <= nonce_out;
+                found_work_id <= work_out;
+            end
+        end
+    end
+
     // ======================================================================
     // Control: load block on start, (re)generate matrix only on a new pph.
     // ======================================================================
@@ -189,6 +227,8 @@ module core #(
             pph_reg          <= '0;
             ts_reg           <= '0;
             nonce_ctr        <= '0;
+            tgt_reg          <= '0;
+            work_id          <= '0;
             matrix_gen_start <= 1'b0;
             gen_ack          <= 1'b0;
         end else begin
@@ -199,6 +239,8 @@ module core #(
                 blk_pph   <= pre_pow_hash;
                 ts_reg    <= timestamp;
                 nonce_ctr <= nonce;
+                tgt_reg   <= target;
+                work_id   <= work_id + 1'b1;
                 if (pre_pow_hash != pph_reg) begin
                     matrix_gen_start <= 1'b1;   // seeds MatrixGen next cycle
                     gen_ack          <= 1'b0;   // wait for a fresh done (not the stale level)

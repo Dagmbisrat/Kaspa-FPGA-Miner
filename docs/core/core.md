@@ -43,9 +43,13 @@ sustains 1 nonce/cycle.
 | `pre_pow_hash` | in  | 256   | Block header hash — matrix seed, stable per block |
 | `timestamp`    | in  | 64    | UNIX timestamp (little-endian uint64)            |
 | `nonce`        | in  | 64    | Starting nonce for the stream                    |
+| `target`       | in  | 256   | Difficulty target; a hash passes if `hash <= target` |
 | `hash_out`     | out | 256   | Streamed 32-byte kHeavyHash result               |
 | `nonce_out`    | out | 64    | Nonce that produced the current `hash_out`       |
 | `valid_out`    | out | 1     | High on the cycle `hash_out`/`nonce_out` are valid|
+| `found`        | out | 1     | Pulse when a streamed hash meets `target`         |
+| `found_nonce`  | out | 64    | The winning nonce                                |
+| `found_work_id`| out | 8     | Job/work id the winning nonce belongs to         |
 
 > There is no per-nonce `start`/`done` handshake on the datapath. Each IP's
 > `valid_out` feeds the next IP's `valid_in`, so validity flows automatically.
