@@ -13,11 +13,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y verilator python3 python3-pip
+          sudo apt-get install -y git make autoconf g++ flex bison libfl-dev help2man python3 python3-pip
           pip3 install pycryptodome
+
+      - name: Cache Verilator
+        id: cache-verilator
+        uses: actions/cache@v4
+        with:
+          path: /usr/local
+          key: verilator-v5.036-${{ runner.os }}
+
+      # apt Verilator on ubuntu-latest is too old (5.020) and mis-compiles the
+      # Keccak unpacked-array assignment; build a pinned recent release instead.
+      - name: Build Verilator 5.036
+        if: steps.cache-verilator.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/verilator/verilator
+          cd verilator
+          git checkout v5.036
+          autoconf
+          ./configure
+          make -j"$(nproc)"
+          sudo make install
+
+      - name: Verilator version
+        run: verilator --version
 
       - name: keccak
         run: make -C hw/crypto/keccak runtest
