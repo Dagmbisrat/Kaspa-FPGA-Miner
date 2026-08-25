@@ -156,12 +156,30 @@ The kHeavyHash nibble packing lines up so no explicit conversion is needed:
 
 ---
 
+## Difficulty Target Compare
+
+A tail stage after cSHAKE2 compares each streamed `hash_out` against `target`
+(latched per work as `tgt_reg`) and pulses `found` with the winning `found_nonce`
+when `hash <= target`. `target` is a runtime input (difficulty changes per job)
+and is **not** tied to the pph: a target-only change costs nothing (no matrix
+regeneration).
+
+A small `work_id` (incremented on each new-work `start`) rides down a delay line
+alongside the nonce. `found` only fires when the result's `work_id` matches the
+current job, so stale in-flight results from a previous job are ignored and every
+`found_nonce` is attributed to the right work (`found_work_id`).
+
+> **Byte order (confirmed):** kaspad's `pow.toBig()` treats the hash as
+> little-endian, which is exactly how `hash_out` is packed - so the raw 256-bit
+> `hash_out <= target` matches kaspad's `CheckProofOfWork` (no byte swap needed).
+> The host supplies `target` as the plain 256-bit integer expanded from `bits`.
+
+---
+
 ## Not Yet Included (by design)
 
-- **Target/difficulty compare** — the core emits the full hash stream;
-  winning-nonce detection is done downstream.
-- **Block-switch drain** — a few in-flight results at a block boundary can be
-  wrong-but-harmless (no hardware hazard); they are filtered downstream.
+- **Block-switch drain** - a few in-flight results at a block boundary can be
+  wrong-but-harmless (no hardware hazard); they are filtered by `work_id`.
 
 ---
 
@@ -181,7 +199,7 @@ make runtest CSHAKE_STAGES=12    # override cSHAKE depth (must divide 24)
 - Phase 1: cache-hit re-use (block A, new nonce base)
 - Phase 2: block switch + regeneration (block B)
 
-All 96 streamed hashes match the reference at 1 nonce/cycle.
+All 96 streamed hashes and 96 target-compare decisions match the reference (192 checks) at 1 nonce/cycle.
 
 ---
 
