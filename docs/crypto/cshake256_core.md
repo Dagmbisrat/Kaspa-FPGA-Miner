@@ -50,8 +50,7 @@ carries only the logic for that one configuration.
 > instance is dedicated to one hash mode. This removes the runtime `s_value`
 > sponge MUX, drops the unused sponge table, and fixes the Stage-0 pad offset,
 > saving area when many cores are instantiated (e.g. a throughput pipeline with
-> one `S_VALUE=0` core feeding one `S_VALUE=1` core). A single time-shared engine
-> that must compute both hashes should instead use the serial `cshake256_core`.
+> one `S_VALUE=0` core feeding one `S_VALUE=1` core).
 
 ### Ports
 
