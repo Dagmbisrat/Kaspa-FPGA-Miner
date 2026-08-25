@@ -2,7 +2,7 @@
 
 An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, targeting Xilinx Kintex-7 FPGAs — starting on the **XC7K70T** for development and scaling to the **XC7K325T** for full throughput.
 
-> ⚠️ **Status:** Work in progress — single core verified in simulation, moving toward throughput-optimised multi-core architecture and host interface integration.
+> ⚠️ **Status:** Work in progress — streaming single core (1 nonce/cycle) verified in simulation against the Python reference; next up are synthesis/timing, difficulty compare, multi-core scaling, and the host interface.
 
 ---
 
@@ -134,10 +134,13 @@ Progress and planned work — updated as phases complete.
 - [x] xoshiro256++ PRNG
 - [x] Matrix generator (PRNG + rank check)
 - [x] Matrix-vector multiply unit
-- [x] Single `core` (full kHeavyHash pipeline) + verification
-- [ ] Pipeline optimisation (Keccak rounds, matmul accumulator)
+- [x] Pipeline optimisation — feed-forward cSHAKE256 + 1-vector/cycle matmul (parametric `NUM_STAGES`)
+- [x] Streaming `core` — 1 nonce/cycle pipeline (cSHAKE1 → matmul → XOR → cSHAKE2) + reference-checked TB
+- [x] Standard cSHAKE256 message encoding fix
+- [x] Analytical flip-flop usage estimate per IP (printed on `runtest`)
+- [ ] Difficulty/target compare + winning-nonce output
+- [ ] Synthesis: real LUT / DSP / BRAM usage per core (yosys / Vivado)
 - [ ] Achieve ≥180 MHz timing on XC7K70T
-- [ ] Measure LUT / DSP / BRAM usage per core
 - [ ] Confirm fit within XC7K70T resources
 
 ### Phase 2 — Multi-Core (XC7K70T)
