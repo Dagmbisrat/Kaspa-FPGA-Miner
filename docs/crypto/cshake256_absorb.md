@@ -1,5 +1,12 @@
 # cSHAKE256 Absorb — RTL Implementation
 
+> ⚠️ **SUPERSEDED — historical reference only.**
+> The FSM-based `cshake256_absorb` module described below is **no longer used or
+> compiled.** The current design absorbs the message combinationally (XOR into a
+> precomputed sponge constant) inside the feed-forward pipeline. See
+> [cSHAKE256 Pipelined Core](cshake256_core.md).
+
+
 ---
 
 ## Overview

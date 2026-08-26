@@ -1,8 +1,6 @@
 MODULE  = core
 TOP     = core_tb
-TOP_BENCH = core_bench_tb
 OBJDIR  = /tmp/core_build
-OBJDIR_BENCH = /tmp/core_bench_build
 VECTORS = sim/expected_vectors.mem
 
 # Dependency paths (relative to this Makefile)
@@ -12,47 +10,54 @@ XOSHIRO  = ../utils/xoshiro256pp
 MATGEN   = ../matrix/matrix_generator
 MATMUL   = ../matrix/matmul_unit
 
+JOBS          ?= 4
+CSHAKE_STAGES ?= 24    # cSHAKE pipeline layers; must divide 24
+MATMUL_STAGES ?= 8     # matmul pipeline layers; must divide 64
+
 SRC = \
     $(KECCAK)/rtl/keccak_round.sv \
     $(KECCAK)/rtl/keccak_f1600.sv \
-    $(CSHAKE)/rtl/cshake256_absorb.sv \
     $(CSHAKE)/rtl/cshake256_core.sv \
     $(XOSHIRO)/rtl/xoshiro256pp.sv \
     $(MATGEN)/rtl/matrix_rankcheck.sv \
     $(MATGEN)/rtl/matrix_generator.sv \
-    $(MATMUL)/rtl/matmul_unit.sv \
+    $(MATMUL)/rtl/matmul_pipelined_unit.sv \
     rtl/matrix_cache.sv \
     rtl/$(MODULE).sv
 
 TB = tb/core_tb.sv
 
-.PHONY: all clean wave vectors bench bench_wave help
+.PHONY: all runtest wave vectors clean help
 
 help:
-	@echo "Usage:"
-	@echo "  make runtest     - Generate vectors, compile, and run testbench"
-	@echo "  make wave        - Generate vectors, compile, run, and open waveform"
-	@echo "  make vectors     - Generate test vectors from Python reference"
-	@echo "  make bench       - Compile and run benchmark testbench"
-	@echo "  make bench_wave  - Compile, run benchmark, and open waveform"
-	@echo "  make clean       - Remove generated files"
+	@echo "Targets:"
+	@echo "  make all       - Alias for runtest"
+	@echo "  make runtest   - Generate vectors, build, and run the core TB"
+	@echo "  make vectors   - Regenerate test vectors from the Python reference"
+	@echo "  make wave      - Run the TB and open the waveform in GTKWave"
+	@echo "  make clean     - Remove build dir, waveform, and vectors"
+	@echo ""
+	@echo "Variables (make TARGET VAR=value):"
+	@echo "  CSHAKE_STAGES=$(CSHAKE_STAGES)  - cSHAKE pipeline depth, must divide 24"
+	@echo "  MATMUL_STAGES=$(MATMUL_STAGES)   - matmul pipeline depth, must divide 64"
+	@echo "  JOBS=$(JOBS)          - Parallel Verilator / C++ build jobs"
 
-vectors:
+all: runtest
+
+$(VECTORS): sim/gen_vectors.py
 	python3 sim/gen_vectors.py
 
-runtest: vectors
-	verilator --binary --timing --trace -j 0 -Wno-fatal --top-module $(TOP) --Mdir $(OBJDIR) $(SRC) $(TB)
+vectors: $(VECTORS)
+
+runtest: $(VECTORS)
+	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal --top-module $(TOP) \
+		  -GCSHAKE_STAGES=$(CSHAKE_STAGES) -GMATMUL_STAGES=$(MATMUL_STAGES) \
+		  --Mdir $(OBJDIR) $(SRC) $(TB)
 	$(OBJDIR)/V$(TOP)
+	@python3 ../tools/fpga_estimate.py core CSHAKE_STAGES=$(CSHAKE_STAGES) MATMUL_STAGES=$(MATMUL_STAGES)
 
 wave: runtest
 	gtkwave sim/$(TOP).vcd
 
-bench:
-	verilator --binary --timing --trace -j 0 -Wno-fatal --top-module $(TOP_BENCH) --Mdir $(OBJDIR_BENCH) $(SRC) tb/$(TOP_BENCH).sv
-	$(OBJDIR_BENCH)/V$(TOP_BENCH)
-
-bench_wave: bench
-	gtkwave sim/$(TOP_BENCH).vcd
-
 clean:
-	rm -rf $(OBJDIR) $(OBJDIR_BENCH) sim/$(TOP).vcd sim/$(TOP_BENCH).vcd $(VECTORS)
+	rm -rf $(OBJDIR) sim/$(TOP).vcd $(VECTORS)

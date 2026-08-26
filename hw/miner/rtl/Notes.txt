@@ -1,0 +1,124 @@
+hw/miner - Host Interface / Miner System Layer   (design notes / handoff)
+=========================================================================
+
+PURPOSE
+-------
+- hw/core is a bare hashing IP: give it a block + target, it streams 1 hash/cycle
+  and pulses `found` for winning nonces. It has NO host connection.
+- This layer wraps one or more `core` instances and connects them to a host
+  (PC / mining software) so the miner can RECEIVE WORK and REPORT WINNERS.
+- This is also where MULTI-CORE lives: distributing work and collecting results
+  across N cores.
+
+WHAT THIS LAYER MUST DO
+-----------------------
+1. Receive work from the host: pre_pow_hash(256), timestamp(64), target(256),
+   base nonce(64).
+2. Distribute work to N cores; give each core a DISJOINT slice of the nonce space.
+3. Start the cores (a new pph triggers matrix regen inside the core; a
+   target-only change is free).
+4. Collect winning nonces (found / found_nonce / found_work_id) into a FIFO.
+5. Report winners to the host; accept new work at any time.
+
+ARCHITECTURE (three layers)
+---------------------------
+  host SW  <--transport-->  work_controller  -->  core[0..N-1]
+   (PC)     (UART/PCIe/AXI)  (regs + FIFO +        (hashing)
+                              nonce split)
+
+  - transport adapter (rtl/io/): converts the physical link to a simple internal
+    register bus. SWAPPABLE AT BUILD TIME (parameter/`define TRANSPORT):
+      uart_if  - UART <-> reg bus. Simple, simulatable in Verilator. Use FIRST.
+      pcie_if  - PCIe hard block + AXI-Lite. NOT Verilator-simulatable. Later.
+      axi_if   - Zynq PS AXI master (SoC FPGAs).
+  - work_controller: TRANSPORT-AGNOSTIC brain. Register map + nonce split +
+    result FIFO/arbiter. Reusable across links; verify it with NO phy.
+  - core: unchanged IP from hw/core.
+
+CORE INTERFACE (already built - hw/core/rtl/core.sv)
+----------------------------------------------------
+  core #(int CSHAKE_STAGES=24, int MATMUL_STAGES=8) (
+    input  clk, rst, start,
+    input  [255:0] pre_pow_hash, [63:0] timestamp, [63:0] nonce, [255:0] target,
+    output [255:0] hash_out, [63:0] nonce_out, valid_out,
+    output found, [63:0] found_nonce, [7:0] found_work_id );
+  - Streams 1 nonce/cycle starting at `nonce`, incrementing by 1 internally.
+  - `start` (re)loads work; matrix regenerates ONLY when pre_pow_hash changes
+    (internal pph_reg compare). Target-only change costs nothing.
+  - `found` pulses when hash <= target; found_work_id tags which job it belongs to.
+  - BYTE ORDER: confirmed little-endian == kaspad pow.toBig(). hash_out is already
+    the little-endian integer, so raw `hash_out <= target` is correct. Host loads
+    `target` as the plain 256-bit integer expanded from the block `bits`.
+
+REGISTER MAP (draft - controller as AXI-Lite / simple reg-bus slave)
+--------------------------------------------------------------------
+  Offset  Name             Dir  Description
+  0x00    CTRL             W    bit0 START (load work + begin), bit1 STOP/idle
+  0x04    STATUS           R    bit0 busy, bit1 found_valid (FIFO non-empty)
+  0x08    PPH[0..7]        W    pre_pow_hash, 8 x 32-bit (256b)
+  0x28    TIMESTAMP[0..1]  W    64-bit
+  0x30    TARGET[0..7]     W    target, 8 x 32-bit (256b)
+  0x50    NONCE_BASE[0..1] W    64-bit starting nonce
+  0x58    FOUND_NONCE[0..1] R   pop front of found FIFO (64b)
+  0x60    FOUND_WORKID     R    work id for the popped nonce
+  0x64    FOUND_COUNT      R    number of pending finds
+  (Data is tiny - reads/writes only, NO DMA needed.)
+
+WORK DISTRIBUTION (multi-core)
+------------------------------
+  - Broadcast pph/timestamp/target to ALL cores (identical).
+  - Give each core a different nonce base so ranges do not overlap.
+    RECOMMENDED with the current core (it steps by 1): RANGE partition -
+      core i gets [base + i*STRIDE, base + (i+1)*STRIDE).
+    (Interleaving would need the core extended to stride by N.)
+  - Pulse start on all cores together on new work.
+
+RESULT COLLECTION
+-----------------
+  - Finds are RARE, so a simple round-robin scanner over the cores' `found`
+    pulses + a small FIFO (e.g. 16 deep) is plenty.
+  - FIFO entry: { core_id, found_nonce, found_work_id }. Host pops via reg map.
+  - work_id lets the host attribute a late find to the correct job.
+
+BUILD-TIME TRANSPORT SELECTION
+------------------------------
+  - miner_top #(TRANSPORT="UART") instantiates only the chosen rtl/io/ adapter.
+  - Keep work_controller behind a clean internal bus (addr/wdata/we/rdata or
+    AXI-Lite) so it can be verified with NO phy and ported across links.
+
+IMPLEMENTATION PLAN (suggested order)
+-------------------------------------
+  1. work_controller for ONE core (reg map + start + found FIFO), transport-agnostic.
+     TB: drive the register bus directly (no PHY). Reuse hw/core sim/gen_vectors
+     flow to load a known block+target and check found nonces vs the reference.
+  2. uart_if adapter (UART <-> reg bus). Simulatable. Prove end-to-end over UART.
+  3. Generalize work_controller to N cores: nonce-range split + result arbiter/FIFO.
+  4. pcie_if adapter (PCIe/XDMA + AXI-Lite) as a drop-in; work_controller unchanged.
+  5. Host software: pool/stratum + node client, difficulty->target expansion, submit.
+
+PLANNED FILES
+-------------
+  rtl/miner_top.sv        - top: transport + controller + N cores (TRANSPORT param)
+  rtl/work_controller.sv  - reg map, nonce split, found FIFO (transport-agnostic)
+  rtl/io/uart_if.sv       - UART <-> reg bus (first)
+  rtl/io/pcie_if.sv       - PCIe/AXI-Lite <-> reg bus (later)
+  tb/                     - register-bus testbench (no PHY)
+  Makefile                - build + sim (mirror the other IP Makefiles)
+
+RATIONALE / GOTCHAS
+-------------------
+  - Transport is NOT a throughput bottleneck: only a small work packet in and
+    rare finds out. UART is functionally sufficient; PCIe/AXI are for convenience.
+  - Keep solo-vs-pool OUT of hardware: same controller + cores. Only the `target`
+    value and the host software differ (solo = network target + build/submit
+    blocks; pool = share target + submit shares). Pool also re-verifies, but the
+    on-chip target compare is still needed as the SUBMISSION FILTER.
+  - Verify the controller WITHOUT a PHY (PCIe/UART PHYs are hard/impossible to
+    simulate in Verilator).
+  - Repo quirk: the editor virtual FS can diverge from disk here - write build
+    files via the terminal and verify on disk (see /memories or prior commits).
+
+STATUS
+------
+  - core (hashing + target compare + found/work_id): DONE, verified vs Python ref.
+  - this layer: NOT STARTED (scaffold only).

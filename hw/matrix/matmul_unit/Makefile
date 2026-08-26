@@ -1,29 +1,58 @@
-MODULE  = matmul_unit
-CACHE   = ../../core/rtl/matrix_cache.sv
-SRC     = rtl/$(MODULE).sv $(CACHE)
-TB      = tb/matmul_tb.sv
-TOP     = matmul_tb
-OBJDIR  = /tmp/matmul_build
+MODULE  = matmul_pipelined_unit
+SRC     = rtl/$(MODULE).sv
+TB      = tb/matmul_pipelined_tb.sv
+TOP     = matmul_pipelined_tb
+OBJDIR  = /tmp/matmul_pipe_build
+WOBJDIR = /tmp/matmul_pipe_wired_build
 VECTORS = sim/expected_vectors.mem
 
-.PHONY: all clean wave vectors help
+JOBS       ?= 4
+NUM_STAGES ?= 8
+
+.PHONY: all runtest wiretest wave vectors clean help
 
 help:
-	@echo "Usage:"
-	@echo "  make runtest     - Generate vectors, compile, and run testbench"
-	@echo "  make wave        - Generate vectors, compile, run, and open waveform"
-	@echo "  make vectors     - Generate test vectors from Python reference"
-	@echo "  make clean       - Remove generated files"
+	@echo "Targets:"
+	@echo "  make all       - Alias for runtest"
+	@echo "  make runtest   - Internal-matrix build (write port): gen vectors, build, run"
+	@echo "  make wiretest  - Wired-matrix build (matrix_in): same vectors, INTERNAL_MATRIX=0"
+	@echo "  make vectors   - Regenerate test vectors from the Python reference"
+	@echo "  make wave      - Run the internal-matrix TB and open the waveform"
+	@echo "  make clean     - Remove build dirs, waveform, and vectors"
+	@echo ""
+	@echo "Variables (make TARGET VAR=value):"
+	@echo "  NUM_STAGES=$(NUM_STAGES)   - Pipeline depth, must divide 64 (1,2,4,8,16,32,64)"
+	@echo "  JOBS=$(JOBS)         - Parallel Verilator / C++ build jobs"
 
-vectors:
+all: runtest
+
+$(VECTORS): sim/gen_vectors.py
 	python3 sim/gen_vectors.py
 
-runtest: vectors
-	verilator --binary --timing --trace -j 0 -Wno-fatal --top-module $(TOP) --Mdir $(OBJDIR) $(SRC) $(TB)
+vectors: $(VECTORS)
+
+# Internal-matrix mode (default): matrix loaded via the write port.
+$(OBJDIR)/V$(TOP): $(SRC) $(TB)
+	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal \
+		  --top-module $(TOP) -GNUM_STAGES=$(NUM_STAGES) -GUSE_WIRED=0 \
+		  --Mdir $(OBJDIR) $(SRC) $(TB)
+
+runtest: $(VECTORS) $(OBJDIR)/V$(TOP)
 	$(OBJDIR)/V$(TOP)
+	@python3 ../../tools/fpga_estimate.py matmul_pipelined_unit NUM_STAGES=$(NUM_STAGES) INTERNAL_MATRIX=1
+
+# Wired-matrix mode: matrix presented on matrix_in (INTERNAL_MATRIX=0), as in-core.
+$(WOBJDIR)/V$(TOP): $(SRC) $(TB)
+	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal \
+		  --top-module $(TOP) -GNUM_STAGES=$(NUM_STAGES) -GUSE_WIRED=1 \
+		  --Mdir $(WOBJDIR) $(SRC) $(TB)
+
+wiretest: $(VECTORS) $(WOBJDIR)/V$(TOP)
+	$(WOBJDIR)/V$(TOP)
+	@python3 ../../tools/fpga_estimate.py matmul_pipelined_unit NUM_STAGES=$(NUM_STAGES) INTERNAL_MATRIX=0
 
 wave: runtest
 	gtkwave sim/$(TOP).vcd
 
 clean:
-	rm -rf $(OBJDIR) sim/$(TOP).vcd $(VECTORS)
+	rm -rf $(OBJDIR) $(WOBJDIR) sim/$(TOP).vcd $(VECTORS)

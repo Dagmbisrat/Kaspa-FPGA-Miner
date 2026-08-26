@@ -20,6 +20,7 @@ vectors:
 runtest: vectors
 	verilator --binary --timing --trace -j 0 -Wno-fatal --top-module $(TOP) --Mdir $(OBJDIR) $(SRC) $(TB)
 	$(OBJDIR)/V$(TOP)
+	@python3 ../../tools/fpga_estimate.py xoshiro256pp
 
 wave: runtest
 	gtkwave sim/$(TOP).vcd

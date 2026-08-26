@@ -115,5 +115,5 @@ During IDLE, `rd_en_gen` is asserted to pre-fetch the stored `rd_PrePowHash` tag
 
 ## References
 
-- **Companion docs** — [matrix_rankcheck](matrix_rankcheck.md) | [xoshiro256++](xoshiro256pp.md)
+- **Companion docs** — [matrix_rankcheck](matrix_rankcheck.md) | [matmul_pipelined_unit](matmul_pipelined_unit.md) | [xoshiro256++](xoshiro256pp.md)
 - **kHeavyHash** — https://github.com/bcutil/kheavyhash

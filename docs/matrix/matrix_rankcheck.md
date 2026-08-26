@@ -96,4 +96,4 @@ Cache has 1-cycle read latency: data for row `N` appears on the cycle after `rd_
 
 ## References
 
-- **Companion docs** — [matrix_generator](matrix_generator.md) | [matrix_cache](../rtl/matrix/matrix_cache.sv)
+- **Companion docs** — [matrix_generator](matrix_generator.md) | [matmul_pipelined_unit](matmul_pipelined_unit.md) | [matrix_cache](../rtl/matrix/matrix_cache.sv)
