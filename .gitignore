@@ -22,3 +22,16 @@ todo.txt
 
 #debug output files
 result.out
+
+#Vivado project files
+*.xpr
+*.rpt
+*.dcp
+*.jou
+*.log
+.Xil/
+
+# Vivado OOC synthesis outputs (fpga/ooc_synth) - *.rpt/*.dcp/*.jou/*.log
+# above already cover most of it; these two aren't caught by those globs
+fpga/ooc_synth/reports/
+fpga/ooc_synth/dfx_runtime.txt
