@@ -38,6 +38,8 @@ module matmul_pipelined_tb;
     logic [7:0]    n16th_value;
     logic [63:0]   wr_matrix_data;
     logic [16383:0] matrix_bus;               // wired-matrix input (packed)
+    logic          matrix_reload;
+    logic          matmul_busy;
     logic [255:0]  vector_in;
     logic          valid_in;
     logic [255:0]  product_out;
@@ -53,6 +55,8 @@ module matmul_pipelined_tb;
         .n16th_value    (n16th_value),
         .wr_matrix_data (wr_matrix_data),
         .matrix_in      (matrix_bus),
+        .matrix_reload  (matrix_reload),
+        .busy           (matmul_busy),
         .vector_in      (vector_in),
         .valid_in       (valid_in),
         .product_out    (product_out),
@@ -113,10 +117,11 @@ module matmul_pipelined_tb;
         $dumpfile("sim/matmul_pipelined_tb.vcd");
         $dumpvars(0, matmul_pipelined_tb);
 
-        rst          = 1;
-        wr_matrix_en = 0;
-        valid_in     = 0;
-        vector_in    = '0;
+        rst           = 1;
+        wr_matrix_en  = 0;
+        matrix_reload = 0;
+        valid_in      = 0;
+        vector_in     = '0;
 
         // Load matrix, vectors and expected products from the reference file.
         $readmemh("sim/expected_vectors.mem", mem);
@@ -136,6 +141,16 @@ module matmul_pipelined_tb;
         // Wired mode: matrix_bus already presents the whole matrix combinationally.
         if (!USE_WIRED)
             load_matrix();
+
+        // Rebuild the KCM product tables from the now-present matrix, then wait
+        // for the build to start and finish (busy rise, then fall).
+        @(negedge clk);
+        matrix_reload = 1'b1;
+        @(negedge clk);
+        matrix_reload = 1'b0;
+        wait (matmul_busy);
+        wait (!matmul_busy);
+        @(negedge clk);
 
         // Stream all vectors back-to-back, valid_in high every cycle.
         for (int v = 0; v < NUM_VEC; v++) begin
