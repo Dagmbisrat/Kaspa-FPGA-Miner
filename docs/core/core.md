@@ -56,39 +56,46 @@ sustains 1 nonce/cycle.
 
 ---
 
-## Two-Phase Control
+## Control FSM
 
 The core tracks `pph_reg` — the pph the cached matrix was built for — and
 compares the incoming `pre_pow_hash` against it (a combinational, non-blocking
-check).
+check). A new pph takes the `GEN → LOAD → STREAM` path; a repeat goes straight
+to `STREAM`.
 
 ```
           start
             │
    ┌────────▼──────────┐  pre_pow_hash == pph_reg
-   │  load block regs  │──────────────────────────► STREAM
+   │  load block regs  │──────────────────────────────────────────► STREAM
    │  (pph,ts,nonce)   │  (matrix already cached)
    └────────┬──────────┘
             │ pre_pow_hash != pph_reg (new block)
             ▼
-   ┌───────────────────┐  matrix_generator done
-   │       GEN         │──────────────────────────► STREAM
-   │  (blocking regen) │
-   └───────────────────┘
+   ┌───────────────────┐  gen done   ┌───────────────────┐  matmul busy falls
+   │       GEN         │────────────►│       LOAD        │──────────────────► STREAM
+   │  (blocking regen) │             │ (rebuild matmul   │
+   └───────────────────┘             │  product tables)  │
+                                     └───────────────────┘
 ```
 
 - **GEN** — pulse `matrix_gen_start`, hold `valid_in = 0`, wait for a *fresh*
-  generator completion, then update `pph_reg` and stream.
+  generator completion, then update `pph_reg` and pulse `matrix_reload`.
+- **LOAD** — matmul rebuilds its per-cell product tables from the new matrix
+  (~1024 cycles); wait for `busy` to rise then fall (`load_seen`), then stream.
+  `valid_in` stays 0.
 - **STREAM** — free-run `nonce_ctr`, assert `valid_in` every cycle. Stays here
   streaming; a new `start` reloads and repeats the decision.
 
-Matrix (re)generation therefore happens **only on a new block**; identical
-`pre_pow_hash` re-uses the cached matrix and streams immediately.
+Matrix (re)generation and the table rebuild therefore happen **only on a new
+block**; identical `pre_pow_hash` re-uses the cached matrix and tables and
+streams immediately.
 
 > **`gen_ack`**: `matrix_generator.done` is a *level* that stays high after the
 > first generation, not a pulse. The FSM waits for `done` to go **low then high**
 > (`gen_ack`) so a block switch cannot mistake the stale-high level for a fresh
-> completion and stream before the new matrix is ready.
+> completion and stream before the new matrix is ready. `load_seen` applies the
+> same "rise then fall" guard to matmul's `busy` in the LOAD state.
 
 ---
 
@@ -101,13 +108,17 @@ Every STREAM cycle:
 | 1 | header | `{nonce_ctr, 256'b0, timestamp, pre_pow_hash}` (80 bytes) |
 | 2 | **cSHAKE1** | `S_VALUE=0` (ProofOfWorkHash), 80-byte → `pow_hash` |
 | 3 | vector | `vector_in = pow_hash` directly (nibble packing matches) |
-| 4 | **matmul** | `INTERNAL_MATRIX=0`, reads whole matrix from cache `matrix_flat` → `product` |
+| 4 | **matmul** | `INTERNAL_MATRIX=0`, per-cell product-table lookups → `product` |
 | 5 | XOR | `digest = product ^ pow_hash` (`pow_hash` delayed by the matmul latency) |
 | 6 | **cSHAKE2** | `S_VALUE=1` (HeavyHash), 32-byte digest → `hash_out` |
 
-The matmul reads the matrix **combinationally in parallel** (all 64×64 nibbles)
-from the widened `matrix_cache.matrix_flat`, because a 1-vector/cycle multiply
-cannot use the cache's one-row-per-cycle read port.
+The matmul multiply is a lookup, not a DSP/LUT multiplier: each `M[i][j]` is
+constant per block, so `M[i][j]*v[j]` is precomputed into a 16-entry table
+(one per cell, ~32k SLICEM LUT). The table array is rebuilt once per new matrix
+during the `LOAD` state — the matmul reads `matrix_cache.matrix_flat`
+**combinationally in parallel** only then, since a 1-vector/cycle datapath
+cannot use the cache's one-row-per-cycle read port. See
+[matmul_pipelined_unit](../matrix/matmul_pipelined_unit.md).
 
 ### pow_hash alignment for the XOR
 
@@ -124,6 +135,9 @@ the full pipeline latency and presented as `nonce_out`, aligned with `hash_out`:
 ```
   TOTAL_LAT = C_LAT + M_LAT + C_LAT ,  C_LAT = CSHAKE_STAGES + 2 ,  M_LAT = MATMUL_STAGES
 ```
+
+The one-time `LOAD` table rebuild (~1024 cycles per new block) is **not** part of
+`TOTAL_LAT` — it is a gap before streaming, not steady-state latency.
 
 ---
 
