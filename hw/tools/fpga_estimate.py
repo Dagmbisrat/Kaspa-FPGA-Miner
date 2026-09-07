@@ -33,9 +33,15 @@ def matmul(args):
         ("valid pipe", val, ""),
         ("matrix" + (" (internal)" if internal else " (wired-in)"), mat,
          "64 x 64 x 4" if internal else "read from cache, 0 FF"),
+        ("kcm load run regs", 64 * 8, "64 rows x 8-bit accumulator"),
+        ("kcm load fsm", 12, "ld_col + ld_k + state"),
     ]
-    logic = ("~40-70k LUT (rough)", "4096 x 4x4 nibble mults + 64 reduction trees")
-    dsp = "0 (4x4 mults too small for DSP; mapped to LUTs)"
+    # KCM: each 4x4 mult is a 16x8 constant-coefficient table in SLICEM
+    # distributed RAM (8 LUT/mult), rebuilt in ~1024 cycles by 64 load adders.
+    logic = ("~30-45k LUT (rough)",
+             "4096 x 16x8 KCM product tables (distributed RAM, ~32k SLICEM) "
+             "+ 64-row load adders + 64 reduction trees")
+    dsp = "0 (KCM tables in LUTRAM; no mults, no DSP)"
     return ff, logic, dsp
 
 
@@ -108,11 +114,11 @@ def core(args):
     c_lat = cs + 2
     total_lat = c_lat + ms + c_lat
     cshake_ff = 1088 + 1600 + cs * 1600 + (cs + 2)
-    matmul_ff = ms * 64 * 14 + 128 * (ms - 1) + ms
+    matmul_ff = ms * 64 * 14 + 128 * (ms - 1) + ms + 64 * 8 + 12  # + KCM load regs
     ff = [
         ("cSHAKE1 (POW)", cshake_ff, "CSHAKE_STAGES=%d" % cs),
         ("cSHAKE2 (HeavyHash)", cshake_ff, "CSHAKE_STAGES=%d" % cs),
-        ("matmul (wired)", matmul_ff, "MATMUL_STAGES=%d, no matrix FF" % ms),
+        ("matmul (wired)", matmul_ff, "MATMUL_STAGES=%d, KCM tables in LUTRAM" % ms),
         ("matrix_cache", 17152, "matrix + tag + read regs"),
         ("matrix_generator", 267, "PRNG state + FSM"),
         ("matrix_rankcheck", 16416, "working matrix + counters"),
@@ -122,8 +128,8 @@ def core(args):
         ("target/found", total_lat * 8 + 337, "work-id delay + tgt/found regs"),
     ]
     logic = ("dominated by matmul + 2x Keccak",
-             "see matmul/cSHAKE estimates; ~100-160k LUT rough total")
-    dsp = "0 (nibble mults + Keccak; none use DSP)"
+             "see matmul/cSHAKE estimates; matmul now ~32k SLICEM LUTRAM (KCM)")
+    dsp = "0 (KCM tables in LUTRAM + Keccak; none use DSP)"
     return ff, logic, dsp
 
 
