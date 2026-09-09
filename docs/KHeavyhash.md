@@ -302,16 +302,19 @@ final_hash = self._cshake256_myImplimentaion(digest, 32, "", "HeavyHash")
 
 ### Resource Estimates (per core)
 
-- **LUTs**: ~15K-25K (cSHAKE256 + matrix logic)
+- **LUTs**: cSHAKE256 + matrix logic; matmul uses ~32k SLICEM LUT for the
+  constant-coefficient product tables (see `matrix/matmul_pipelined_unit.md`)
 - **Registers**: ~3K-5K
-- **BRAM**: 2-4 blocks (matrix storage)
-- **DSP**: 64+ (matrix multiplication)
-- **Frequency**: 200-400 MHz
+- **BRAM / DSP**: 0 — the implementation is all-LUT (Keccak is XOR/rotate;
+  matmul is table lookup, not multiply)
+- **Frequency**: 200-400 MHz target
 
 ### Optimization Strategies
 
 1. **Matrix caching**: Generate once per PrePowHash, reuse for all nonces
-2. **Parallel matrix multiply**: Use DSP slices for multiply-accumulate
+2. **Constant-coefficient matrix multiply**: the matrix is fixed per block, so
+   each `M[i][j]*v[j]` is a per-cell 16-entry lookup table (rebuilt on a new
+   matrix), not a multiplier
 3. **Pipeline cSHAKE256**: 24-cycle Keccak-f[1600] permutation
 4. **Multiple cores**: Parallelize nonce search
 

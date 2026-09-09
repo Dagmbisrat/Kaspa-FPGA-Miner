@@ -40,9 +40,13 @@ module core #(
     localparam int WID       = 8;                      // work/job id width
 
     // ---- Control FSM ----
-    typedef enum logic [1:0] { IDLE = 2'b00, GEN = 2'b01, STREAM = 2'b10 } state_t;
+    // IDLE -> GEN (new matrix) -> LOAD (rebuild matmul KCM tables) -> STREAM.
+    typedef enum logic [1:0] { IDLE = 2'b00, GEN = 2'b01, STREAM = 2'b10, LOAD = 2'b11 } state_t;
     state_t state;
     logic   gen_ack;   // generator acknowledged start (done went low) — avoids stale done
+    logic   mm_reload; // one-shot: tell matmul to rebuild its KCM product tables
+    logic   mm_busy;   // matmul is rebuilding tables (from Matmul.busy)
+    logic   load_seen; // saw mm_busy rise — avoids racing straight through LOAD
 
     // ---- Block context ----
     logic [255:0] blk_pph;    // pph of the block currently being mined
@@ -145,6 +149,8 @@ module core #(
         .clk(clk), .rst(rst),
         .wr_matrix_en(1'b0), .n16th_value(8'b0), .wr_matrix_data(64'b0),
         .matrix_in(matrix_flat),
+        .matrix_reload(mm_reload),
+        .busy(mm_busy),
         .vector_in(pow_hash),
         .valid_in(c1_valid),
         .product_out(product),
@@ -232,8 +238,11 @@ module core #(
             work_id          <= '0;
             matrix_gen_start <= 1'b0;
             gen_ack          <= 1'b0;
+            mm_reload        <= 1'b0;
+            load_seen        <= 1'b0;
         end else begin
             matrix_gen_start <= 1'b0;   // one-shot default
+            mm_reload        <= 1'b0;   // one-shot default
 
             if (start) begin
                 // Load a (possibly new) block and decide gen-vs-stream.
@@ -255,9 +264,16 @@ module core #(
                         if (!matrix_gen_done)
                             gen_ack <= 1'b1;              // generator started (done cleared)
                         if (gen_ack && matrix_gen_done) begin
-                            pph_reg <= blk_pph;
-                            state   <= STREAM;
+                            pph_reg   <= blk_pph;
+                            mm_reload <= 1'b1;            // rebuild matmul KCM tables
+                            load_seen <= 1'b0;
+                            state     <= LOAD;
                         end
+                    end
+                    LOAD: begin
+                        // Wait for the matmul KCM rebuild: see busy rise, then fall.
+                        if (mm_busy)               load_seen <= 1'b1;
+                        if (load_seen && !mm_busy) state     <= STREAM;
                     end
                     STREAM: begin
                         nonce_ctr <= nonce_ctr + 64'd1;
