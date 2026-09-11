@@ -20,12 +20,16 @@ obj_dir/
 # Personal files
 todo.txt
 
+# Personal Scripts
+Scripts/
+
 #debug output files
 result.out
 
 #Vivado project files
 *.xpr
 *.rpt
+*.dmp
 *.dcp
 *.jou
 *.log
