@@ -290,19 +290,23 @@ module matmul_pipelined_unit #(
                 for (gp = 0; gp < N/2; gp++) begin : g_pair
                     localparam int R0 = gp*2;
                     localparam int R1 = gp*2 + 1;
-                    (* use_dsp = "yes" *) logic [2*LANE_W-1:0] wide_sum;
+                    // Combinational packed add, then register the WHOLE
+                    // 48-bit word in one shot, then slice it apart with pure
+                    // wiring. Registering-then-slicing-into-two-signals (the
+                    // previous shape here) didn't give Vivado a clean
+                    // add+register pair to absorb into the DSP48's own PREG;
+                    // this shape does.
+                    logic [2*LANE_W-1:0] wide_sum;
                     always_comb
                         wide_sum = { {(LANE_W-ACC_W){1'b0}}, ain[R1],  {(LANE_W-ACC_W){1'b0}}, ain[R0]  }
                                  + { {(LANE_W-ACC_W){1'b0}}, part[R1], {(LANE_W-ACC_W){1'b0}}, part[R0] };
+                    (* use_dsp = "yes" *) logic [2*LANE_W-1:0] wide_sum_q;
                     always_ff @(posedge clk or posedge rst) begin
-                        if (rst) begin
-                            acc[st][R0] <= '0;
-                            acc[st][R1] <= '0;
-                        end else begin
-                            acc[st][R0] <= wide_sum[ACC_W-1:0];
-                            acc[st][R1] <= wide_sum[LANE_W+ACC_W-1:LANE_W];
-                        end
+                        if (rst) wide_sum_q <= '0;
+                        else     wide_sum_q <= wide_sum;
                     end
+                    assign acc[st][R0] = wide_sum_q[ACC_W-1:0];
+                    assign acc[st][R1] = wide_sum_q[LANE_W+ACC_W-1:LANE_W];
                 end
             end
 
