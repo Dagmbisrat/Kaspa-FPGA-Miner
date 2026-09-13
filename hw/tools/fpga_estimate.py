@@ -23,12 +23,18 @@ def _p(args, key, default):
 def matmul(args):
     ns = _p(args, "NUM_STAGES", 8)
     internal = _p(args, "INTERNAL_MATRIX", 1)
-    acc = ns * 64 * 14
+    extra_lat = _p(args, "EXTRA_LAT", 0)
+    # Stage 0 has no incoming accumulator (ain=0) and stays a plain fabric
+    # register; every later stage's add lives in a DSP48 P register instead
+    # (see matmul_pipelined_unit.sv). Only stage 0's 64 accumulators, plus
+    # any EXTRA_LAT output tail, remain fabric FF.
+    acc = (1 + extra_lat) * 64 * 14
+    dsp_acc = (ns - 1) * 32  # 32 row-pairs/stage x (NUM_STAGES-1) real stages
     vec = 128 * (ns - 1)
     val = ns
     mat = 16384 if internal else 0
     ff = [
-        ("accumulators", acc, "NUM_STAGES x 64 x 14"),
+        ("accumulators (fabric)", acc, "(1 + EXTRA_LAT) x 64 x 14; rest live in DSP48 P regs"),
         ("vector forward", vec, "128 x (NUM_STAGES-1)"),
         ("valid pipe", val, ""),
         ("matrix" + (" (internal)" if internal else " (wired-in)"), mat,
@@ -38,10 +44,15 @@ def matmul(args):
     ]
     # KCM: each 4x4 mult is a 16x8 constant-coefficient table in SLICEM
     # distributed RAM (8 LUT/mult), rebuilt in ~1024 cycles by 64 load adders.
-    logic = ("~30-45k LUT (rough)",
+    # The intra-stage column-sum tree (part[i]) still lives in LUT fabric;
+    # only the inter-stage accumulate add moved to DSP48.
+    logic = ("~30-45k LUT (rough, minus the migrated accumulate adds)",
              "4096 x 16x8 KCM product tables (distributed RAM, ~32k SLICEM) "
-             "+ 64-row load adders + 64 reduction trees")
-    dsp = "0 (KCM tables in LUTRAM; no mults, no DSP)"
+             "+ 64-row load adders + 64 intra-stage column-sum trees")
+    dsp = "%d (dual-row packed DSP48 ALU accumulate, stage 0 stays fabric)" % dsp_acc
+    if dsp_acc > 240:
+        print("  WARNING: estimated matmul DSP48 usage (%d) exceeds the "
+              "240 available on xc7k70t for NUM_STAGES=%d" % (dsp_acc, ns))
     return ff, logic, dsp
 
 
@@ -111,25 +122,33 @@ def xoshiro(args):
 def core(args):
     cs = _p(args, "CSHAKE_STAGES", 24)
     ms = _p(args, "MATMUL_STAGES", 8)
+    mel = _p(args, "MATMUL_EXTRA_LAT", 0)
     c_lat = cs + 2
-    total_lat = c_lat + ms + c_lat
+    m_lat = ms + mel
+    total_lat = c_lat + m_lat + c_lat
     cshake_ff = 1088 + 1600 + cs * 1600 + (cs + 2)
-    matmul_ff = ms * 64 * 14 + 128 * (ms - 1) + ms + 64 * 8 + 12  # + KCM load regs
+    # Only stage 0's 64 accumulators + any EXTRA_LAT tail stay fabric FF;
+    # the rest of the inter-stage accumulate lives in DSP48 P registers.
+    matmul_ff = (1 + mel) * 64 * 14 + 128 * (ms - 1) + ms + 64 * 8 + 12  # + KCM load regs
+    matmul_dsp = (ms - 1) * 32
     ff = [
         ("cSHAKE1 (POW)", cshake_ff, "CSHAKE_STAGES=%d" % cs),
         ("cSHAKE2 (HeavyHash)", cshake_ff, "CSHAKE_STAGES=%d" % cs),
-        ("matmul (wired)", matmul_ff, "MATMUL_STAGES=%d, KCM tables in LUTRAM" % ms),
+        ("matmul (wired)", matmul_ff, "MATMUL_STAGES=%d, KCM tables in LUTRAM, accumulate on DSP48" % ms),
         ("matrix_cache", 17152, "matrix + tag + read regs"),
         ("matrix_generator", 267, "PRNG state + FSM"),
         ("matrix_rankcheck", 16416, "working matrix + counters"),
-        ("pow_hash delay", ms * 256, "MATMUL_STAGES x 256"),
+        ("pow_hash delay", m_lat * 256, "M_LAT(%d) x 256" % m_lat),
         ("nonce delay line", total_lat * 64, "TOTAL_LAT(%d) x 64" % total_lat),
         ("block/ctrl regs", 643, "pph/blk_pph/ts/nonce_ctr/state"),
         ("target/found", total_lat * 8 + 337, "work-id delay + tgt/found regs"),
     ]
     logic = ("dominated by matmul + 2x Keccak",
-             "see matmul/cSHAKE estimates; matmul now ~32k SLICEM LUTRAM (KCM)")
-    dsp = "0 (KCM tables in LUTRAM + Keccak; none use DSP)"
+             "see matmul/cSHAKE estimates; matmul now ~32k SLICEM LUTRAM (KCM) + intra-stage sum trees")
+    dsp = "%d (matmul dual-row packed DSP48 accumulate; Keccak/cSHAKE use none)" % matmul_dsp
+    if matmul_dsp > 240:
+        print("  WARNING: estimated matmul DSP48 usage (%d) exceeds the "
+              "240 available on xc7k70t for MATMUL_STAGES=%d" % (matmul_dsp, ms))
     return ff, logic, dsp
 
 

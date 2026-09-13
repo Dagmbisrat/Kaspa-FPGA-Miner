@@ -8,6 +8,7 @@ VECTORS = sim/expected_vectors.mem
 
 JOBS       ?= 4
 NUM_STAGES ?= 8
+EXTRA_LAT  ?= 0
 
 .PHONY: all runtest wiretest wave vectors clean help
 
@@ -22,6 +23,7 @@ help:
 	@echo ""
 	@echo "Variables (make TARGET VAR=value):"
 	@echo "  NUM_STAGES=$(NUM_STAGES)   - Pipeline depth, must divide 64 (1,2,4,8,16,32,64)"
+	@echo "  EXTRA_LAT=$(EXTRA_LAT)    - Extra output-register cycles after the DSP48 accumulate (0 unless timing needs it)"
 	@echo "  JOBS=$(JOBS)         - Parallel Verilator / C++ build jobs"
 
 all: runtest
@@ -34,7 +36,7 @@ vectors: $(VECTORS)
 # Internal-matrix mode (default): matrix loaded via the write port.
 $(OBJDIR)/V$(TOP): $(SRC) $(TB)
 	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal \
-		  --top-module $(TOP) -GNUM_STAGES=$(NUM_STAGES) -GUSE_WIRED=0 \
+		  --top-module $(TOP) -GNUM_STAGES=$(NUM_STAGES) -GUSE_WIRED=0 -GEXTRA_LAT=$(EXTRA_LAT) \
 		  --Mdir $(OBJDIR) $(SRC) $(TB)
 
 runtest: $(VECTORS) $(OBJDIR)/V$(TOP)
@@ -44,7 +46,7 @@ runtest: $(VECTORS) $(OBJDIR)/V$(TOP)
 # Wired-matrix mode: matrix presented on matrix_in (INTERNAL_MATRIX=0), as in-core.
 $(WOBJDIR)/V$(TOP): $(SRC) $(TB)
 	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal \
-		  --top-module $(TOP) -GNUM_STAGES=$(NUM_STAGES) -GUSE_WIRED=1 \
+		  --top-module $(TOP) -GNUM_STAGES=$(NUM_STAGES) -GUSE_WIRED=1 -GEXTRA_LAT=$(EXTRA_LAT) \
 		  --Mdir $(WOBJDIR) $(SRC) $(TB)
 
 wiretest: $(VECTORS) $(WOBJDIR)/V$(TOP)

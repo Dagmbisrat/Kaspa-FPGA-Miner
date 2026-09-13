@@ -24,7 +24,8 @@ module matmul_pipelined_tb;
     parameter int NUM_STAGES = 8;             // must divide 64
     parameter int NUM_VEC    = 64;            // must match gen_vectors.py
     parameter bit USE_WIRED  = 0;             // 0: internal flops, 1: wired matrix_in
-    localparam int LAT       = NUM_STAGES;    // must match the DUT
+    parameter int EXTRA_LAT  = 0;             // must match the DUT
+    localparam int LAT       = NUM_STAGES + EXTRA_LAT; // must match the DUT
     localparam int N         = 64;
     localparam int MEM_WORDS = N + 2*NUM_VEC;
 
@@ -47,7 +48,8 @@ module matmul_pipelined_tb;
 
     matmul_pipelined_unit #(
         .NUM_STAGES      (NUM_STAGES),
-        .INTERNAL_MATRIX (!USE_WIRED)
+        .INTERNAL_MATRIX (!USE_WIRED),
+        .EXTRA_LAT       (EXTRA_LAT)
     ) dut (
         .clk            (clk),
         .rst            (rst),

@@ -11,8 +11,11 @@
 // a matched delay line so each streamed hash_out is tagged with its nonce.
 // ---------------------------------------------------------------------------
 module core #(
-    parameter int CSHAKE_STAGES = 24,  // cSHAKE pipeline layers; must divide 24
-    parameter int MATMUL_STAGES = 8    // matmul pipeline layers; must divide 64
+    parameter int CSHAKE_STAGES    = 24, // cSHAKE pipeline layers; must divide 24
+    parameter int MATMUL_STAGES    = 8,  // matmul pipeline layers; must divide 64
+    parameter int MATMUL_EXTRA_LAT = 0   // matmul EXTRA_LAT passthrough (DSP48
+                                          // accumulate tail; 0 unless synthesis
+                                          // timing on the packed-add path needs it)
 ) (
     input  logic         clk,
     input  logic         rst,
@@ -35,7 +38,7 @@ module core #(
 
     // ---- Pipeline latencies ----
     localparam int C_LAT     = CSHAKE_STAGES + 2;      // cSHAKE valid_in->valid_out
-    localparam int M_LAT     = MATMUL_STAGES;          // matmul valid_in->valid_out
+    localparam int M_LAT     = MATMUL_STAGES + MATMUL_EXTRA_LAT; // matmul valid_in->valid_out
     localparam int TOTAL_LAT = C_LAT + M_LAT + C_LAT;  // cshake1 + matmul + cshake2
     localparam int WID       = 8;                      // work/job id width
 
@@ -144,7 +147,7 @@ module core #(
     logic [255:0] product;
     logic         m_valid;
     matmul_pipelined_unit #(
-        .NUM_STAGES(MATMUL_STAGES), .INTERNAL_MATRIX(1'b0)
+        .NUM_STAGES(MATMUL_STAGES), .INTERNAL_MATRIX(1'b0), .EXTRA_LAT(MATMUL_EXTRA_LAT)
     ) Matmul (
         .clk(clk), .rst(rst),
         .wr_matrix_en(1'b0), .n16th_value(8'b0), .wr_matrix_data(64'b0),

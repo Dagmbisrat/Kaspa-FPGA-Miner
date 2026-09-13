@@ -33,6 +33,21 @@
 // summation is pipelined across NUM_STAGES register layers (segmented
 // accumulation). Throughput is always 1 vector/cycle after LAT-cycle fill.
 //
+// Inter-stage accumulate on DSP48:
+//   Stage 0 has no incoming accumulator (ain=0) and stays a plain fabric
+//   register. Every later stage's ain[i]+part[i] add (14-bit, ACC_W) is
+//   packed two rows at a time into one 48-bit DSP48 ALU add - 24-bit lanes
+//   with 10 guard bits each, so carry from the low row's lane can never
+//   reach the high row's. This is an ordinary wide two's-complement add
+//   (use_dsp="yes"), not Xilinx's SIMD/dual-add OPMODE. 32 row-pairs x
+//   (NUM_STAGES-1) real stages = 224 DSP48 at the default NUM_STAGES=8 (240
+//   available on xc7k70t) - see the budget assert below; DSP demand scales
+//   WITH NUM_STAGES (more stages = more concurrent in-flight accumulators),
+//   so this packing is only budget-safe up to NUM_STAGES<=8 at N=64.
+//   EXTRA_LAT adds optional output-register cycles after the last stage,
+//   only needed if synthesis timing on the packed-add path requires it
+//   (default 0, i.e. no latency change from the pre-DSP design).
+//
 // Vector forwarding is minimized: vector_in is de-swapped once into plain
 // column order, then each stage consumes its COLS_PER_STAGE columns from the
 // low nibbles and forwards ONLY the still-unused columns to the next stage.
@@ -53,8 +68,11 @@
 // ===========================================================================
 module matmul_pipelined_unit #(
     parameter int NUM_STAGES     = 8,  // pipeline register layers; must divide 64
-    parameter bit INTERNAL_MATRIX = 1  // 1: internal flops + write port (TB)
+    parameter bit INTERNAL_MATRIX = 1, // 1: internal flops + write port (TB)
                                        // 0: matrix wired from matrix_in (IP)
+    parameter int EXTRA_LAT      = 0   // extra output-register cycles for the
+                                       // DSP48 packed-accumulate path; bump
+                                       // only if synthesis timing needs it
 ) (
     input  logic         clk,
     input  logic         rst,
@@ -84,11 +102,17 @@ module matmul_pipelined_unit #(
     localparam int NIB            = 4;
     localparam int COLS_PER_STAGE = N / NUM_STAGES;
     localparam int ACC_W          = 14;  // max dot = 64*(15*15) = 14400 < 2^14
-    localparam int LAT            = NUM_STAGES;
+    localparam int LAT            = NUM_STAGES + EXTRA_LAT;
 
     initial begin
         assert (N % NUM_STAGES == 0)
             else $fatal(1, "NUM_STAGES (%0d) must divide 64", NUM_STAGES);
+        // Each real stage (all but stage 0) packs 2 rows' accumulate-adds
+        // into one DSP48 ALU add (32 pairs/stage); this must fit the
+        // target part's DSP48 budget (240 on xc7k70t).
+        assert ((NUM_STAGES - 1) * (N / 2) <= 240)
+            else $warning("matmul_pipelined_unit: estimated DSP48 usage (%0d) exceeds 240 for NUM_STAGES=%0d",
+                          (NUM_STAGES - 1) * (N / 2), NUM_STAGES);
     end
 
     // -----------------------------------------------------------------------
@@ -241,11 +265,45 @@ module matmul_pipelined_unit #(
             end
 
             // Accumulator register.
-            always_ff @(posedge clk or posedge rst) begin
-                if (rst)
-                    for (int i = 0; i < N; i++) acc[st][i] <= '0;
-                else
-                    for (int i = 0; i < N; i++) acc[st][i] <= ain[i] + part[i];
+            //
+            // Stage 0 is a pass-through (ain==0), so it stays a plain fabric
+            // add. Every later stage packs 2 independent rows' 14-bit adds
+            // into one 48-bit DSP48 ALU add: ACC_W=14 so ain+part needs only
+            // 15 bits, and a 24-bit lane per row leaves 10 guard bits - the
+            // carry out of the low lane can never reach the high lane. This
+            // is a plain wide two's-complement add (not the SIMD/dual-add
+            // OPMODE, which needs explicit CARRYINSEL/ALUMODE wiring), so
+            // use_dsp="yes" reliably maps it onto one DSP48 ALU per pair.
+            // 32 pairs x (NUM_STAGES-1) real stages = 224 DSP48 at the
+            // default NUM_STAGES=8 (240 available) - see the budget assert
+            // above.
+            if (st == 0) begin : g_acc
+                always_ff @(posedge clk or posedge rst) begin
+                    if (rst)
+                        for (int i = 0; i < N; i++) acc[st][i] <= '0;
+                    else
+                        for (int i = 0; i < N; i++) acc[st][i] <= part[i];
+                end
+            end else begin : g_acc
+                localparam int LANE_W = 24;  // ACC_W=14 + 10 guard bits
+                genvar gp;
+                for (gp = 0; gp < N/2; gp++) begin : g_pair
+                    localparam int R0 = gp*2;
+                    localparam int R1 = gp*2 + 1;
+                    (* use_dsp = "yes" *) logic [2*LANE_W-1:0] wide_sum;
+                    always_comb
+                        wide_sum = { {(LANE_W-ACC_W){1'b0}}, ain[R1],  {(LANE_W-ACC_W){1'b0}}, ain[R0]  }
+                                 + { {(LANE_W-ACC_W){1'b0}}, part[R1], {(LANE_W-ACC_W){1'b0}}, part[R0] };
+                    always_ff @(posedge clk or posedge rst) begin
+                        if (rst) begin
+                            acc[st][R0] <= '0;
+                            acc[st][R1] <= '0;
+                        end else begin
+                            acc[st][R0] <= wide_sum[ACC_W-1:0];
+                            acc[st][R1] <= wide_sum[LANE_W+ACC_W-1:LANE_W];
+                        end
+                    end
+                end
             end
 
             // Forward only the columns the downstream stages still need.
@@ -272,13 +330,43 @@ module matmul_pipelined_unit #(
         end
     end
 
+    // Optional extra pipeline tail after the last accumulate stage, only
+    // needed if the packed-DSP accumulate path fails timing (EXTRA_LAT=0
+    // collapses this to plain wiring, matching the pre-DSP latency).
+    logic [ACC_W-1:0] acc_final [0:N-1];
+    logic             valid_final;
+    if (EXTRA_LAT == 0) begin : g_tail
+        assign acc_final   = acc[NUM_STAGES-1];
+        assign valid_final = valid_pipe[NUM_STAGES-1];
+    end else begin : g_tail
+        logic [ACC_W-1:0] tail [0:EXTRA_LAT-1][0:N-1];
+        logic             tail_valid [0:EXTRA_LAT-1];
+        always_ff @(posedge clk or posedge rst) begin
+            if (rst) begin
+                for (int k = 0; k < EXTRA_LAT; k++) begin
+                    for (int i = 0; i < N; i++) tail[k][i] <= '0;
+                    tail_valid[k] <= 1'b0;
+                end
+            end else begin
+                for (int i = 0; i < N; i++) tail[0][i] <= acc[NUM_STAGES-1][i];
+                tail_valid[0] <= valid_pipe[NUM_STAGES-1];
+                for (int k = 1; k < EXTRA_LAT; k++) begin
+                    for (int i = 0; i < N; i++) tail[k][i] <= tail[k-1][i];
+                    tail_valid[k] <= tail_valid[k-1];
+                end
+            end
+        end
+        assign acc_final   = tail[EXTRA_LAT-1];
+        assign valid_final = tail_valid[EXTRA_LAT-1];
+    end
+
     // Output: >>10 truncation to a nibble, with the row^1 output swap.
     always_comb begin
         product_out = '0;
         for (int i = 0; i < N; i++)
-            product_out[(i ^ 1)*4 +: 4] = acc[NUM_STAGES-1][i][13:10];
+            product_out[(i ^ 1)*4 +: 4] = acc_final[i][13:10];
     end
 
-    assign valid_out = valid_pipe[NUM_STAGES-1];
+    assign valid_out = valid_final;
 
 endmodule
