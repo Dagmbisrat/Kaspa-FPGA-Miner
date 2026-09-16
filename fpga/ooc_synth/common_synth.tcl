@@ -21,6 +21,11 @@
 #                                 ; # to synth_design as -generic overrides,
 #                                 ; # e.g. {CSHAKE_STAGES=24 MATMUL_STAGES=8}
 #
+# Environment:
+#   OOC_THREADS - parallel jobs for synth_design (default 4). Set by ooc.sh
+#                 from the env var of the same name; export it or pass it
+#                 per-run, e.g. `OOC_THREADS=8 ooc matmul 5.0 8 0`.
+#
 # After synthesis this also prints a plain-language summary (LUT/FF/BRAM/DSP
 # used + %, WNS, and the real max frequency implied by that WNS at the
 # constrained CLK_NS) and appends one row per run to reports/summary.csv, so
@@ -40,10 +45,16 @@ if {![info exists HAS_CLK]}  { set HAS_CLK 1 }
 if {![info exists OUT_DIR]}  { set OUT_DIR "reports/$TOP" }
 if {![info exists GENERICS]} { set GENERICS {} }
 
+if {[info exists ::env(OOC_THREADS)] && [string is integer -strict $::env(OOC_THREADS)] && $::env(OOC_THREADS) > 0} {
+    set JOBS $::env(OOC_THREADS)
+} else {
+    set JOBS 4
+}
+
 file mkdir $OUT_DIR
 file mkdir "reports"
 
-puts "==== Synthesizing $TOP (OOC) for part $PART ===="
+puts "==== Synthesizing $TOP (OOC) for part $PART (jobs=$JOBS) ===="
 foreach f $SRC_FILES { puts "  src: $f" }
 if {[llength $GENERICS] > 0} {
     puts "  generics: $GENERICS"
@@ -51,7 +62,7 @@ if {[llength $GENERICS] > 0} {
 
 read_verilog -sv $SRC_FILES
 
-set synth_args [list -top $TOP -part $PART -mode out_of_context]
+set synth_args [list -top $TOP -part $PART -mode out_of_context -jobs $JOBS]
 foreach g $GENERICS { lappend synth_args -generic $g }
 synth_design {*}$synth_args
 
