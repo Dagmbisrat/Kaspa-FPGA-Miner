@@ -45,8 +45,13 @@ if {![info exists HAS_CLK]}  { set HAS_CLK 1 }
 if {![info exists OUT_DIR]}  { set OUT_DIR "reports/$TOP" }
 if {![info exists GENERICS]} { set GENERICS {} }
 
-if {[info exists ::env(OOC_THREADS)] && [string is integer -strict $::env(OOC_THREADS)] && $::env(OOC_THREADS) > 0} {
-    set JOBS $::env(OOC_THREADS)
+;# Trimmed: the cmd.exe/VIVADO_BAT path (`set OOC_THREADS=4 && ...`) leaves a
+;# trailing space in the forwarded value, which set_param's strict int check
+;# below rejects if not stripped first.
+set OOC_THREADS_TRIMMED ""
+if {[info exists ::env(OOC_THREADS)]} { set OOC_THREADS_TRIMMED [string trim $::env(OOC_THREADS)] }
+if {$OOC_THREADS_TRIMMED ne "" && [string is integer -strict $OOC_THREADS_TRIMMED] && $OOC_THREADS_TRIMMED > 0} {
+    set JOBS $OOC_THREADS_TRIMMED
 } else {
     set JOBS 4
 }
@@ -62,7 +67,11 @@ if {[llength $GENERICS] > 0} {
 
 read_verilog -sv $SRC_FILES
 
-set synth_args [list -top $TOP -part $PART -mode out_of_context -jobs $JOBS]
+# synth_design has no -jobs flag; Vivado's parallelism knob is the
+# general.maxThreads param, set before invoking it.
+set_param general.maxThreads $JOBS
+
+set synth_args [list -top $TOP -part $PART -mode out_of_context]
 foreach g $GENERICS { lappend synth_args -generic $g }
 synth_design {*}$synth_args
 

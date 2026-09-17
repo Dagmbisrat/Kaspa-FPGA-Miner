@@ -8,9 +8,13 @@
 // at compile time with -GS_VALUE=<0|1> -GDATA_80BYTE=<0|1>.
 //
 // Feed-forward pipeline: one input accepted per cycle, one hash produced per
-// cycle after the LATENCY = NUM_STAGES + 2 cycle fill.  Each batch drives
+// cycle after the LATENCY = STAGES + 2 cycle fill.  Each batch drives
 // valid_in every cycle and counts edges from the first sampled input to the
 // n-th valid_out, so measured throughput approaches the ideal 1.0 H/cycle.
+//
+// This benchmark only exercises the unfolded (FOLDED=0) datapath -- folded
+// builds trade throughput for area by design, so a throughput sweep isn't
+// meaningful there; FOLDED is left at the DUT's default (0).
 //
 // For every batch reports:
 //   - total cycles (first sampling edge → n-th valid_out edge)
@@ -20,19 +24,19 @@
 // Plusarg overrides:
 //   +clk_mhz=N   assumed clock for MH/s display  (default 500)
 // Compile-time:
-//   -GNUM_STAGES=<n>    pipeline depth of the DUT (default 24; must divide 24)
+//   -GSTAGES=<n>        pipeline depth of the DUT (default 24; must divide 24)
 //   -GS_VALUE=<0|1>     hash mode (default 1 = HeavyHash)
 //   -GDATA_80BYTE=<0|1> input size (default 0 = 32-byte)
 
 module throughput_tb;
 
   // ── Parameters ─────────────────────────────────────────────────────────────
-  parameter int NUM_STAGES    = 24;     // override with -GNUM_STAGES=<n>
+  parameter int STAGES        = 24;     // override with -GSTAGES=<n>
   parameter bit S_VALUE       = 1'b1;   // 1 = HeavyHash, 0 = ProofOfWorkHash
   parameter bit DATA_80BYTE   = 1'b0;   // 0 = 32-byte, 1 = 80-byte
   parameter int CLK_PERIOD_NS = 10;
-  localparam int LATENCY          = NUM_STAGES + 2;
-  localparam int ROUNDS_PER_STAGE = 24 / NUM_STAGES;  // critical-path depth (Fmax proxy)
+  localparam int LATENCY          = STAGES + 2;
+  localparam int ROUNDS_PER_STAGE = 24 / STAGES;  // critical-path depth (Fmax proxy)
 
   // Batch sizes to sweep (number of back-to-back hashes per run)
   localparam int NUM_BATCHES = 7;
@@ -48,7 +52,7 @@ module throughput_tb;
 
   // ── DUT (mode fixed at build time) ─────────────────────────────────────────
   cshake256_pipelined_core #(
-    .NUM_STAGES (NUM_STAGES),
+    .STAGES     (STAGES),
     .S_VALUE    (S_VALUE),
     .DATA_80BYTE(DATA_80BYTE)
   ) uut (
@@ -92,7 +96,7 @@ module throughput_tb;
     $display("  Mode     : %s (S_VALUE=%0b)",
              S_VALUE ? "HeavyHash" : "ProofOfWorkHash", S_VALUE);
     $display("  Clock    : %0d MHz (assumed for MH/s)", clk_mhz);
-    $display("  Pipeline : NUM_STAGES=%0d  (fill latency %0d cycles)", NUM_STAGES, LATENCY);
+    $display("  Pipeline : STAGES=%0d  (fill latency %0d cycles)", STAGES, LATENCY);
     $display("  Timing   : %0d Keccak round(s)/stage on the critical path (Fmax knob)", ROUNDS_PER_STAGE);
     $display("───────────────────────────────────────────────────────────────");
     $display("  %8s  %8s  %12s  %10s", "Batch", "Cycles", "H/cycle", "MH/s");
@@ -151,9 +155,9 @@ module throughput_tb;
              sum_tp / real'(NUM_BATCHES), sum_tp / real'(NUM_BATCHES) * real'(clk_mhz));
     $display("  Throughput is design-fixed at 1.000000 H/cycle (feed-forward);");
     $display("  the batch numbers above only show fill-overhead approaching that.");
-    $display("  Fill latency  : %0d cycles  (NUM_STAGES + 2)", LATENCY);
+    $display("  Fill latency  : %0d cycles  (STAGES + 2)", LATENCY);
     $display("  Timing lever  : critical path = %0d Keccak round(s)/stage", ROUNDS_PER_STAGE);
-    $display("  Real MH/s     = Fmax(NUM_STAGES) x 1 H/cycle  ->  measure Fmax via synthesis");
+    $display("  Real MH/s     = Fmax(STAGES) x 1 H/cycle  ->  measure Fmax via synthesis");
     $display("═══════════════════════════════════════════════════════════════");
 
     $finish;

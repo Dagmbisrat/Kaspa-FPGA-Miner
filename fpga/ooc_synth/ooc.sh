@@ -69,7 +69,7 @@ Usage: ooc <ip> [params...]
   xoshiro                         (no params, combinational)
   matgen                          (no params)
   rankcheck                       (no params)
-  cshake  [CLK_NS NUM_STAGES S_VALUE DATA_80BYTE]   default: 5.0 24 0 1
+  cshake  [CLK_NS STAGES S_VALUE DATA_80BYTE FOLDED]   default: 5.0 24 0 1 0 (unfolded, 24 stages)
   matmul  [CLK_NS NUM_STAGES INTERNAL_MATRIX]        default: 5.0 8 1
   core    [CLK_NS CSHAKE_STAGES MATMUL_STAGES]       default: 5.0 24 8
 
