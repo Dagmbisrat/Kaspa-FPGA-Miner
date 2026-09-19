@@ -40,7 +40,7 @@ cmd.exe /c 'G:\...\vivado.bat -mode batch -source core.tcl -tclargs 4.0 24 16'
 | Script                        | Top module                 | Params |
 |--------------------------------|-----------------------------|-------|
 | `keccak_f1600.tcl`             | `keccak_f1600`              | none |
-| `cshake256_core.tcl`           | `cshake256_pipelined_core`  | `CLK_NS NUM_STAGES S_VALUE DATA_80BYTE` |
+| `cshake256_core.tcl`           | `cshake256_pipelined_core`  | `CLK_NS STAGES S_VALUE DATA_80BYTE FOLDED` |
 | `xoshiro256pp.tcl`             | `xoshiro256pp`              | none (combinational) |
 | `matrix_generator.tcl`         | `matrix_generator`          | none |
 | `matmul_pipelined_unit.tcl`    | `matmul_pipelined_unit`     | `CLK_NS NUM_STAGES INTERNAL_MATRIX` |
