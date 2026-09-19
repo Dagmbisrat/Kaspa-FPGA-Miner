@@ -226,7 +226,11 @@ if (!FOLDED) begin : g_unfolded
     end
 
     assign hash_out  = kstate[STAGES-1][255:0];
-    assign valid_out = valid_sr[LAT-2];  // aligns valid_out with hash_out
+    // pr0 <- pr1 <- kstate[0] <- ... <- kstate[STAGES-1] is LAT = STAGES + 2
+    // register hops from data_in to hash_out. valid_sr[0] already represents
+    // 1 hop (captured the same edge as pr0), so it takes LAT-1 more shifts --
+    // valid_sr[LAT-1] -- to align with hash_out. (Matches g_folded below.)
+    assign valid_out = valid_sr[LAT-1];
     assign busy      = 1'b0;             // no fold, no re-entry handshake needed
 
 end else begin : g_folded
