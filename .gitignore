@@ -17,6 +17,9 @@ obj_dir/
 # Zed files
 .Zed
 
+# macOS
+.DS_Store
+
 # Personal files
 todo.txt
 

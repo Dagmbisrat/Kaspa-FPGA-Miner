@@ -1,26 +1,28 @@
 # KasMiner — Kaspa FPGA Miner (KHeavyHash)
 
-An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, targeting Xilinx Kintex-7 FPGAs — starting on the **XC7K70T** for development and scaling to the **XC7K325T** for full throughput.
+An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, built so it can actually be flashed and run on the Xilinx Kintex-7 FPGAs people have — from small development boards up to the **XC7K325T** for those chasing maximum throughput.
 
-> ⚠️ **Status:** Work in progress — streaming single core (1 nonce/cycle) with difficulty compare verified in simulation against the Python reference; next up are synthesis/timing, the host interface, and multi-core scaling.
+> ⚠️ **Status:** Work in progress — streaming core (folded and unfolded modes) with difficulty compare verified in simulation against the Python reference; next up are synthesis/timing, the host interface, and multi-core scaling.
 
 ---
 
 ## Design Philosophy
 
-This project is built as a **throughput-first FPGA accelerator**, not just a miner.
+This project's goal is a **Kaspa miner people can actually flash onto the FPGA they have**, not a paper max-throughput design that only fits on expensive boards.
+
+The core is **area/throughput tunable**: `CSHAKE_FOLDED` trades raw hashes/cycle for a dramatically smaller flip-flop footprint (a single reused register instead of one register layer per pipeline stage), so it fits on resource-constrained FPGAs that a fully unfolded, 1-hash/cycle design never would. **Folded is the practical default for most users** — full unfolded throughput is there for anyone with a large enough FPGA to use it.
 
 Primary objective:
-> Maximise hashes per second per watt on Kintex-7 through deep pipelining and parallel core replication — validated on the XC7K70T, then scaled to the XC7K325T.
+> Ship a correct, flashable Kaspa miner that runs on common Kintex-7 FPGAs first; maximise hashes per second per watt on larger boards second.
 
 Development order:
-1. Optimise **one core** for maximum Fmax and clean timing
-2. Measure resource usage per core
-3. Replicate cores for parallel throughput
-4. Integrate a high-performance host interface (PCIe preferred)
+1. Correctness first — bit-exact against the Python reference, in both folded and unfolded modes
+2. Make it fit — area-efficient (folded) configuration as the default target for common FPGAs
+3. Then optimise — Fmax, timing closure, and unfolded/multi-core throughput for those with room to spare
+4. Integrate a host interface (PCIe preferred)
 5. Close timing and optimise routing
 
-Compute first. Interface later.
+Correctness and accessibility first. Raw throughput is a knob, not the whole point.
 
 ---
 
@@ -39,27 +41,43 @@ KHeavyHash is Kaspa's proof-of-work algorithm. It combines two cSHAKE256 hashes 
 
 ### Single Core Pipeline
 
-Each `core` instance runs a four-stage FSM:
+Each `core` instance is a **streaming pipeline**, not a per-nonce FSM: once a
+block's matrix is cached, nonces flow continuously through a feed-forward
+chain, admitting a new one every `N_MAX` cycles:
 
 ```
-IDLE → STAGE1 (MatrixGen ∥ cSHAKE1) → STAGE2 (Matmul) → STAGE3 (cSHAKE2) → DONE
+nonce++ → cSHAKE1 → matmul → XOR(pow_hash) → cSHAKE2 → hash_out
+         (POW,80B)  (matrix)                (HH,32B)   + nonce_out
 ```
 
-STAGE1 runs matrix generation and the first cSHAKE hash in parallel. The matrix is cached per `PrePowHash` and reused across all nonce attempts for the same block, so only STAGE2 and STAGE3 need to repeat per nonce once the cache is warm.
+A small control FSM (`GEN → LOAD → STREAM`) only runs on a **new block**: it
+(re)generates the 64×64 matrix and rebuilds matmul's product tables, then
+streams. A repeated `PrePowHash` skips straight to `STREAM` and reuses the
+cached matrix/tables. See [core.md](docs/core/core.md) for the full pacing
+and tag-FIFO details.
 
-### Core Optimisation (Next)
+### Fmax & Area/Throughput Tradeoffs
 
-The current core is functional but not yet pipelined for maximum Fmax. Planned work:
+**`CSHAKE_FOLDED=1` is the recommended default for most FPGAs.** It folds
+both cSHAKE cores down to a single reused register instead of one register
+layer per pipeline stage — a dramatically smaller flip-flop footprint, at
+the cost of processing one item at a time instead of one per cycle. `core`'s
+admission pacing (`N_MAX`) adapts automatically, so nothing else needs to
+change. Matmul folding isn't implemented yet, but the same admission
+mechanism already supports it.
 
-- Pipeline Keccak-f[1600] rounds
-- Pipeline the matmul accumulator
-- Register stage boundaries aggressively to remove long combinational paths
+`CSHAKE_FOLDED=0` (unfolded, full 1-nonce/cycle throughput) is available for
+anyone with a large enough FPGA to spend the flip-flops — both modes are
+also pipelined with a parametric register-layer depth (`CSHAKE_STAGES`,
+`MATMUL_STAGES` — must divide 24/64) to trade Fmax against flip-flop count
+independently of folding.
+
 - Target: **180–220 MHz** on XC7K70T (baseline), then XC7K325T
 
 At full pipeline depth, throughput per core approaches:
 
 ```
-Throughput_per_core ≈ Fmax   (e.g. 200 MHz → ~200 MH/s per core)
+Throughput_per_core ≈ Fmax / N_MAX   (N_MAX=1 unfolded, e.g. 200 MHz → ~200 MH/s per core)
 ```
 
 ### Multi-Core Scaling (Planned)
@@ -90,21 +108,21 @@ An Ethernet-based interface may be used for early development testing if needed,
 
 ```
 hw/
-├── core/               # Top-level kHeavyHash core (FSM + glue)
+├── core/               # Top-level kHeavyHash core (streaming pipeline + block-load FSM)
 │   ├── rtl/            #   core.sv, matrix_cache.sv
 │   ├── tb/             #   core_tb.sv
 │   └── sim/            #   gen_vectors.py, expected_vectors.mem
 ├── crypto/
-│   ├── cshake256/      # cSHAKE256 engine (absorb + Keccak-f[1600])
+│   ├── cshake256/      # cSHAKE256 engine (parametric STAGES, optional FOLDED)
 │   └── keccak/         # Keccak-f[1600] permutation (24-round, single-cycle)
 ├── matrix/
 │   ├── matrix_generator/ # xoshiro256++ PRNG + GF(2) rank check
-│   └── matmul_unit/    # 64×64 matrix-vector multiply (66 cycles)
+│   └── matmul_unit/    # 64×64 matrix-vector multiply (parametric STAGES, must divide 64)
 └── utils/
     └── xoshiro256pp/   # Combinational xoshiro256++ PRNG
 
 software/
-└── reference/          # Python reference implementation (kheavyhash_ref.py)
+└── referance/          # Python reference implementation (kheavyhash_ref.py)
 
 docs/                   # Design documentation per module
 ```
@@ -137,6 +155,7 @@ Progress and planned work — updated as phases complete.
 - [x] Pipeline optimisation — feed-forward cSHAKE256 + 1-vector/cycle matmul (parametric `NUM_STAGES`)
 - [x] Streaming `core` — 1 nonce/cycle pipeline (cSHAKE1 → matmul → XOR → cSHAKE2) + reference-checked TB
 - [x] Standard cSHAKE256 message encoding fix
+- [x] Parametric cSHAKE/matmul pipeline depth + optional `CSHAKE_FOLDED` area/throughput tradeoff, with generic per-IP admission pacing (`N_MAX`) in `core`
 - [x] Analytical flip-flop usage estimate per IP (printed on `runtest`)
 - [x] Difficulty/target compare + winning-nonce output
 - [x] Confirm hash byte-order for the 256-bit target compare against kaspad (little-endian, matches)
@@ -174,8 +193,9 @@ Progress and planned work — updated as phases complete.
 ## Goals
 
 - Correct, fully verified KHeavyHash implementation in RTL
-- Validated on XC7K70T, scaled to XC7K325T for full throughput
-- Scalable multi-core FPGA accelerator targeting ~1–2 GH/s (160T) → 2–4 GH/s (325T)
+- Flashable on common, resource-constrained FPGAs by default (`CSHAKE_FOLDED`), not just large/expensive boards
+- Validated on XC7K70T, scaled to XC7K325T for those chasing full throughput
+- Scalable multi-core FPGA accelerator targeting ~1–2 GH/s (160T) → 2–4 GH/s (325T) for large-board deployments
 - PCIe-connected high-throughput compute engine
 - Maximise hashes/sec per watt through pipelining and parallelism
 - Clean, modular design with full documentation (education-focused)
