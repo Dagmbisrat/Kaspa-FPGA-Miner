@@ -187,12 +187,14 @@ endtask
 task automatic collect_batch(input int count, input string label, input bit mode);
     int ci;
     logic [255:0] got;
+    // Wait once for the first result. valid_out then stays high for `count`
+    // consecutive cycles (one new hash_out per cycle) -- re-checking
+    // "wait(valid_out===1)" per iteration is wrong here: since it's already
+    // high, the wait falls through immediately without letting a clock edge
+    // pass, which skips a result and duplicates the last one instead.
+    if (mode) wait (valid_out_hh  === 1'b1);
+    else      wait (valid_out_pow === 1'b1);
     for (ci = 0; ci < count; ci++) begin
-        // Results stream back-to-back, one per cycle, once LATENCY has
-        // elapsed -- USE_INTERLEAVED guarantees that hasn't happened yet on
-        // the first iteration, so this wait is real only once.
-        if (mode) wait (valid_out_hh  === 1'b1);
-        else      wait (valid_out_pow === 1'b1);
         #1; // settle past the clock edge
         got = mode ? hash_out_hh : hash_out_pow;
         if (got !== exp_hash[ci]) begin
@@ -204,7 +206,7 @@ task automatic collect_batch(input int count, input string label, input bit mode
             $display("  PASS [%s] test %0d  →  %h", label, ci, got);
             pass_count++;
         end
-        @(posedge clk);
+        if (ci < count - 1) @(posedge clk);
     end
     repeat (2) @(posedge clk); // drain: let valid_out fall before next phase
 endtask
