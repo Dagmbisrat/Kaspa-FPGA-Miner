@@ -44,7 +44,7 @@ cmd.exe /c 'G:\...\vivado.bat -mode batch -source core.tcl -tclargs 4.0 24 16'
 | `xoshiro256pp.tcl`             | `xoshiro256pp`              | none (combinational) |
 | `matrix_generator.tcl`         | `matrix_generator`          | none |
 | `matmul_pipelined_unit.tcl`    | `matmul_pipelined_unit`     | `CLK_NS NUM_STAGES INTERNAL_MATRIX` |
-| `core.tcl`                     | `core`                      | `CLK_NS CSHAKE_STAGES MATMUL_STAGES` |
+| `core.tcl`                     | `core`                      | `CLK_NS CSHAKE_STAGES MATMUL_STAGES CSHAKE_FOLDED` |
 
 Not covered: `hw/miner/` (still a placeholder).
 
