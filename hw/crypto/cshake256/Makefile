@@ -48,7 +48,8 @@ runtest: vectors $(OBJDIR)/V$(TOP)
 	@python3 ../../tools/fpga_estimate.py cshake256_pipelined_core FOLDED=$(FOLDED) STAGES=$(STAGES)
 
 $(OBJDIR_TP)/V$(TOP_TP): $(SRC) $(TB_TP)
-	verilator --binary --timing -j $(JOBS) -Wno-fatal -GSTAGES=$(STAGES) \
+	verilator --binary --timing -j $(JOBS) -Wno-fatal \
+	          -GFOLDED=$(FOLDED) -GSTAGES=$(STAGES) \
 	          --top-module $(TOP_TP) --Mdir $(OBJDIR_TP) $(SRC) $(TB_TP)
 
 throughput: $(OBJDIR_TP)/V$(TOP_TP)
