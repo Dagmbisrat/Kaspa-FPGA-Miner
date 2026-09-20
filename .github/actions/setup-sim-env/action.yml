@@ -17,7 +17,7 @@ runs:
       id: cache-verilator
       uses: actions/cache@v4
       with:
-        path: /usr/local
+        path: /opt/verilator
         key: verilator-v5.050-${{ runner.os }}
 
     # Surfaces hit/miss on every job's summary page so the real hit rate
@@ -41,9 +41,13 @@ runs:
         cd verilator
         git checkout v5.050
         autoconf
-        ./configure
+        ./configure --prefix=/opt/verilator
         make -j"$(nproc)"
         sudo make install
+
+    - name: Add Verilator to PATH
+      shell: bash
+      run: echo "/opt/verilator/bin" >> "$GITHUB_PATH"
 
     - name: Verilator version
       shell: bash
