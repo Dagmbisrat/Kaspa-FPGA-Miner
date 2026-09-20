@@ -13,7 +13,8 @@ VECTORS = sim/expected_vectors.mem
 
 CLK_MHZ ?= 500
 JOBS    ?= 4
-NUM_STAGES ?= 24
+FOLDED ?= 0
+STAGES ?= 24
 
 .PHONY: all runtest throughput wave vectors clean help
 
@@ -26,8 +27,9 @@ help:
 	@echo "  make clean       - Remove build dirs, waveforms, and vectors"
 	@echo ""
 	@echo "Variables (make TARGET VAR=value):"
-	@echo "  NUM_STAGES=$(NUM_STAGES)  - Keccak pipeline layers; must divide 24 (1,2,3,4,6,8,12,24)"
-	@echo "                  sets ROUNDS_PER_STAGE = 24/NUM_STAGES = critical-path / Fmax knob"
+	@echo "  FOLDED=$(FOLDED)         - 0=unfolded (STAGES=register layers, Fmax knob),"
+	@echo "                    1=folded (STAGES=physical instances, area knob)"
+	@echo "  STAGES=$(STAGES)      - meaning depends on FOLDED (see above); must divide 24 (1,2,3,4,6,8,12,24)"
 	@echo "  CLK_MHZ=$(CLK_MHZ)    - Assumed clock for the throughput MH/s column"
 	@echo "  JOBS=$(JOBS)        - Parallel Verilator / C++ build jobs"
 	@echo ""
@@ -37,15 +39,17 @@ vectors:
 	python3 sim/gen_vectors.py
 
 $(OBJDIR)/V$(TOP): $(SRC) $(TB)
-	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal -GNUM_STAGES=$(NUM_STAGES) \
+	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal \
+	          -GFOLDED=$(FOLDED) -GSTAGES=$(STAGES) \
 	          --top-module $(TOP) --Mdir $(OBJDIR) $(SRC) $(TB)
 
 runtest: vectors $(OBJDIR)/V$(TOP)
 	$(OBJDIR)/V$(TOP)
-	@python3 ../../tools/fpga_estimate.py cshake256_pipelined_core NUM_STAGES=$(NUM_STAGES)
+	@python3 ../../tools/fpga_estimate.py cshake256_pipelined_core FOLDED=$(FOLDED) STAGES=$(STAGES)
 
 $(OBJDIR_TP)/V$(TOP_TP): $(SRC) $(TB_TP)
-	verilator --binary --timing -j $(JOBS) -Wno-fatal -GNUM_STAGES=$(NUM_STAGES) \
+	verilator --binary --timing -j $(JOBS) -Wno-fatal \
+	          -GFOLDED=$(FOLDED) -GSTAGES=$(STAGES) \
 	          --top-module $(TOP_TP) --Mdir $(OBJDIR_TP) $(SRC) $(TB_TP)
 
 throughput: $(OBJDIR_TP)/V$(TOP_TP)

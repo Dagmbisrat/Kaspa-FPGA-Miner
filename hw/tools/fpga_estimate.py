@@ -46,14 +46,29 @@ def matmul(args):
 
 
 def cshake(args):
-    ns = _p(args, "NUM_STAGES", 24)
-    ff = [
-        ("encoded block pr0", 1088, "one 136-byte rate block"),
-        ("sponge state pr1", 1600, "25 x 64-bit lanes"),
-        ("keccak pipe kstate", ns * 1600, "NUM_STAGES x 1600"),
-        ("valid shift reg", ns + 2, "NUM_STAGES + 2"),
-    ]
-    logic = ("~20-40k LUT (rough)", "24 Keccak rounds (theta/rho/pi/chi/iota)")
+    folded = _p(args, "FOLDED", 0)
+    stages = _p(args, "STAGES", 24)
+    if not folded:
+        ff = [
+            ("encoded block pr0", 1088, "one 136-byte rate block"),
+            ("sponge state pr1", 1600, "25 x 64-bit lanes"),
+            ("keccak pipe kstate", stages * 1600, "STAGES x 1600"),
+            ("valid shift reg", stages + 2, "STAGES + 2"),
+        ]
+        logic = ("~20-40k LUT (rough)", "24 Keccak rounds (theta/rho/pi/chi/iota)")
+    else:
+        fold_iters = 24 // stages
+        fold_iter_bits = (fold_iters - 1).bit_length() if fold_iters > 1 else 1
+        ff = [
+            ("encoded block pr0", 1088, "one 136-byte rate block"),
+            ("sponge state pr1", 1600, "25 x 64-bit lanes"),
+            ("fold_state reg", 1600, "single reused 1600-bit register"),
+            ("iter counter", fold_iter_bits, "log2(FOLD_ITERS=24/STAGES)"),
+            ("fold_active flag", 1, ""),
+            ("valid shift reg", fold_iters + 2, "FOLD_ITERS(24/STAGES) + 2"),
+        ]
+        logic = ("~1-5k LUT (rough, scales with STAGES)",
+                 "24 Keccak rounds (theta/rho/pi/chi/iota), looped FOLD_ITERS=24/STAGES times")
     dsp = "0 (Keccak is XOR/AND/rotate only)"
     return ff, logic, dsp
 

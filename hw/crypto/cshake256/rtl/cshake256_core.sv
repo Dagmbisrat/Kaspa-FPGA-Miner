@@ -1,5 +1,21 @@
 module cshake256_pipelined_core #(
-    parameter int NUM_STAGES  = 24,   // pipeline register layers for the 24 Keccak rounds; must divide 24
+    // Mode switch: 0 = unfolded (spatial, one physical round-chain per
+    // register layer, 1 hash/cycle streaming). 1 = folded (single reused
+    // register, STAGES instances chained combinationally, looped per hash,
+    // `busy` handshake gates re-entry).
+    parameter bit FOLDED      = 1'b0,
+    // Dual-meaning knob -- its physical effect depends on FOLDED:
+    //   FOLDED=0: STAGES = number of pipeline REGISTER LAYERS the fixed 24
+    //             round instances are split into (must divide 24). Pure
+    //             Fmax knob -- total round-instance count is always 24
+    //             regardless of STAGES.
+    //   FOLDED=1: STAGES = number of PHYSICAL keccak_round instances
+    //             actually built (must divide 24), chained combinationally
+    //             into a single reused register and looped 24/STAGES times
+    //             per hash. Area/throughput knob.
+    // The same numeric value means a different physical quantity depending
+    // on FOLDED -- that's the one subtlety of this parameterization.
+    parameter int STAGES      = 24,
     parameter bit S_VALUE     = 1'b0, // BUILD-TIME S string: 0 = "ProofOfWorkHash", 1 = "HeavyHash"
     parameter bit DATA_80BYTE = 1'b1  // BUILD-TIME input size: 0 = 32-byte input, 1 = 80-byte input
 ) (
@@ -12,22 +28,36 @@ module cshake256_pipelined_core #(
 
     // Output
     output logic [255:0]  hash_out,
-    output logic          valid_out
+    output logic          valid_out,
+
+    // High while a fold is mid-flight (FOLDED builds only); hold valid_in
+    // low until it deasserts. Tied to 0 when not folded (today's streaming
+    // 1 hash/cycle behavior, no handshake needed).
+    output logic          busy
 );
 
 localparam int RATE_BITS  = 1088;  // 136 bytes
 localparam int STATE_BITS = 1600;  // 25 x 64-bit lanes
 localparam int NUM_ROUNDS = 24;
-// Feed-forward sub-pipeline: NUM_STAGES register layers, each computing
+// Feed-forward sub-pipeline: STAGES register layers, each computing
 // ROUNDS_PER_STAGE Keccak rounds combinationally.  Total round instances =
-// NUM_STAGES * ROUNDS_PER_STAGE = 24 regardless of NUM_STAGES.
-localparam int ROUNDS_PER_STAGE = NUM_ROUNDS / NUM_STAGES;
-// Latency = 1 (encode) + 1 (xor sponge) + NUM_STAGES (keccak layers) cycles.
-localparam int LAT = NUM_STAGES + 2;
+// STAGES * ROUNDS_PER_STAGE = 24 regardless of STAGES.  Only meaningful/used
+// in g_unfolded (FOLDED=0).
+localparam int ROUNDS_PER_STAGE = NUM_ROUNDS / STAGES;
+
+// Only meaningful/used in g_folded (FOLDED=1): STAGES physical round
+// instances chained per pass, looped FOLD_ITERS times per hash.
+localparam int FOLD_ITERS     = NUM_ROUNDS / STAGES;
+localparam int FOLD_ITER_BITS = (FOLD_ITERS > 1) ? $clog2(FOLD_ITERS) : 1;
+
+// Latency = 1 (encode) + 1 (xor sponge) + N (keccak) cycles, where N is
+// STAGES register hops (unfolded) or FOLD_ITERS loop passes (folded) --
+// both are "how many more cycles after pr1 until hash_out is valid".
+localparam int LAT = FOLDED ? (FOLD_ITERS + 2) : (STAGES + 2);
 
 initial begin
-    assert (NUM_ROUNDS % NUM_STAGES == 0)
-        else $fatal(1, "NUM_STAGES (%0d) must divide NUM_ROUNDS (24)", NUM_STAGES);
+    assert (NUM_ROUNDS % STAGES == 0)
+        else $fatal(1, "STAGES (%0d) must divide NUM_ROUNDS (24)", STAGES);
 end
 
 
@@ -37,10 +67,6 @@ logic [STATE_BITS-1:0] pr1;  // Stage 1: after XOR into sponge state
 
 // Valid shift register — one bit per pipeline stage (feed-forward, no stalls).
 logic [LAT-1:0] valid_sr;
-
-// Feed-forward Keccak — one 1600-bit register per pipeline stage.
-// A new hash may enter every cycle; result emerges LAT cycles later.
-logic [STATE_BITS-1:0] kstate [0:NUM_STAGES-1];
 
 
 // Round constants
@@ -83,7 +109,11 @@ end
 always_ff @(posedge clk) begin
     pr0 <= stage0_comb;
     if (rst) valid_sr <= '0;
-    else     valid_sr <= {valid_sr[LAT-2:0], valid_in};
+    // Gated by ~busy (always 0 when not folded, so no change there): while
+    // folded and busy, a caller that doesn't perfectly pulse valid_in must
+    // not be able to re-enter the fold mid-flight and corrupt it. Same
+    // pattern as matmul_pipelined_unit's `valid_in & ~busy` gating.
+    else     valid_sr <= {valid_sr[LAT-2:0], valid_in & ~busy};
 end
 // -------------------------------------------------------------------------
 
@@ -138,24 +168,29 @@ always_ff @(posedge clk)
 // -------------------------------------------------------------------------
 
 
-// ********************** Feed-Forward Keccak : NUM_STAGES layers **********
+// ********************** Keccak: spatial (default) or single-register fold *
 // -------------------------------------------------------------------------
-// The 24 Keccak rounds are split into NUM_STAGES pipeline stages, each stage
-// computing ROUNDS_PER_STAGE = 24/NUM_STAGES rounds combinationally, then
-// registering into kstate[st].  There is NO feedback: data flows straight
-// through, so a new hash may enter every clock cycle (initiation interval = 1)
-// and one hash result emerges every cycle after the LAT-cycle fill.
+// FOLDED == 0 (default): the original, untouched feed-forward sub-pipeline.
+// STAGES pipeline stages, each computing ROUNDS_PER_STAGE = 24/STAGES rounds
+// combinationally, then registering into kstate[st]. No feedback: a new hash
+// may enter every cycle and one result emerges every cycle after the
+// LAT-cycle fill.
 //
-// Critical path = ROUNDS_PER_STAGE Keccak rounds (this is the Fmax knob).
-//   NUM_STAGES = 24 -> 1 round / stage  -> highest Fmax
-//   NUM_STAGES < 24 -> more rounds/stage -> lower Fmax, fewer registers
-//
-// Global round index for stage st, inner round r is st*ROUNDS_PER_STAGE + r,
-// which sweeps 0..23 from pr1 to hash_out.  All round constants are static.
+// FOLDED == 1: STAGES keccak_round instances chained combinationally feed a
+// SINGLE register (fold_state), looped back FOLD_ITERS = 24/STAGES times per
+// hash. Far fewer LUTs (proportional to STAGES instead of 24), but only one
+// hash may occupy the fold at a time -- `busy` gates re-entry. Same pattern
+// as the standalone keccak_f1600.sv (its STAGES=1 case) and the deleted
+// commit f630086.
 // -------------------------------------------------------------------------
-genvar st, r;
 generate
-    for (st = 0; st < NUM_STAGES; st++) begin : g_stage
+if (!FOLDED) begin : g_unfolded
+    // Feed-forward Keccak — one 1600-bit register per pipeline stage.
+    // A new hash may enter every cycle; result emerges LAT cycles later.
+    logic [STATE_BITS-1:0] kstate [0:STAGES-1];
+
+    genvar st, r;
+    for (st = 0; st < STAGES; st++) begin : g_stage
         // Combinational chain of ROUNDS_PER_STAGE rounds.
         // chain[0] = stage input, chain[ROUNDS_PER_STAGE] = stage output.
         logic [63:0] chain [0:ROUNDS_PER_STAGE][0:4][0:4];
@@ -189,14 +224,89 @@ generate
                 for (int y = 0; y < 5; y++)
                     kstate[st][(x + 5*y)*64 +: 64] <= chain[ROUNDS_PER_STAGE][x][y];
     end
+
+    assign hash_out  = kstate[STAGES-1][255:0];
+    assign valid_out = valid_sr[LAT-1];  // aligns valid_out with hash_out (kstate[STAGES-1])
+    assign busy      = 1'b0;             // no fold, no re-entry handshake needed
+
+end else begin : g_folded
+    // Single reused register, STAGES rounds chained combinationally per
+    // pass, looped FOLD_ITERS times. Only one hash resident at a time.
+    logic [STATE_BITS-1:0]      fold_state;
+    logic [FOLD_ITER_BITS-1:0]  iter;
+    logic                       fold_active;
+
+    // iter/fold_active are driven off valid_sr[0] (one cycle before pr1
+    // becomes valid) so they're already primed to iter==0 by the cycle the
+    // chain[0] mux below reads pr1 -- same timing convention as the
+    // encode/sponge-xor stages above.
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst) begin
+            iter        <= '0;
+            fold_active <= 1'b0;
+        end else if (valid_sr[0]) begin
+            iter        <= '0;
+            fold_active <= 1'b1;
+        end else if (fold_active) begin
+            if (iter == FOLD_ITER_BITS'(FOLD_ITERS - 1)) begin
+                fold_active <= 1'b0;
+                iter        <= '0;
+            end else begin
+                iter <= iter + 1'b1;
+            end
+        end
+    end
+
+    // Chain of STAGES purely-combinational keccak_round instances.
+    // chain[0] = fold input, chain[STAGES] = fold output.
+    logic [63:0] chain [0:STAGES][0:4][0:4];
+
+    // iter==0 processing happens exactly on the cycle valid_sr[1] is high
+    // (pr1 freshly valid); every other cycle continues looping fold_state.
+    always_comb
+        for (int x = 0; x < 5; x++)
+            for (int y = 0; y < 5; y++)
+                chain[0][x][y] = valid_sr[1]
+                    ? pr1[(x + 5*y)*64 +: 64]
+                    : fold_state[(x + 5*y)*64 +: 64];
+
+    genvar fs;
+    for (fs = 0; fs < STAGES; fs++) begin : g_fold_round
+        // Round index for instance fs during iteration `iter`:
+        //   iter*STAGES + fs, always in 0..23.
+        wire [4:0] rc_idx;
+        assign rc_idx = 5'(iter) * 5'(STAGES) + 5'(fs);
+
+        keccak_round u_round (
+            .state          (chain[fs]),
+            .round_constant (RC[rc_idx]),
+            .out            (chain[fs+1])
+        );
+    end
+
+    // Gated by fold_active: with no enable, fold_state (and hence chain,
+    // hash_out) would keep re-processing garbage through the round chain on
+    // every idle cycle -- functionally harmless (nothing samples it except
+    // on the one correct valid_out cycle) but needless switching activity in
+    // both simulation and real hardware.
+    always_ff @(posedge clk)
+        if (fold_active)
+            for (int x = 0; x < 5; x++)
+                for (int y = 0; y < 5; y++)
+                    fold_state[(x + 5*y)*64 +: 64] <= chain[STAGES][x][y];
+
+    assign hash_out  = fold_state[255:0];
+    // NOT the same tap as g_unfolded: fold_state's final update happens one
+    // cycle after the fold's last combinational pass (the g_unfolded kstate
+    // array has no such extra hop, each stage's own register captures the
+    // final pass directly), so this needs valid_sr[LAT-1], not LAT-2.
+    assign valid_out = valid_sr[LAT-1];
+    // High from the cycle a hash's data becomes pending (valid_sr[0]) through
+    // the last iteration of its fold -- conservative by construction, so a
+    // second valid_in can never land on chain[0] while fold_active is 1.
+    assign busy      = fold_active | valid_sr[0];
+end
 endgenerate
-// -------------------------------------------------------------------------
-
-
-// ********************** Output *******************************************
-// -------------------------------------------------------------------------
-assign hash_out  = kstate[NUM_STAGES-1][255:0];
-assign valid_out = valid_sr[LAT-2];  // aligns valid_out with hash_out (kstate[NUM_STAGES-1])
 // -------------------------------------------------------------------------
 
 endmodule

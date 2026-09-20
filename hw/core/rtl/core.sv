@@ -131,7 +131,7 @@ module core #(
     logic [255:0] pow_hash;
     logic         c1_valid;
     cshake256_pipelined_core #(
-        .NUM_STAGES(CSHAKE_STAGES), .S_VALUE(1'b0), .DATA_80BYTE(1'b1)
+        .STAGES(CSHAKE_STAGES), .S_VALUE(1'b0), .DATA_80BYTE(1'b1)
     ) Cshake1 (
         .clk(clk), .rst(rst),
         .data_in(header),
@@ -172,7 +172,7 @@ module core #(
 
     // cSHAKE2 (HeavyHash, 32-byte) -> final hash
     cshake256_pipelined_core #(
-        .NUM_STAGES(CSHAKE_STAGES), .S_VALUE(1'b1), .DATA_80BYTE(1'b0)
+        .STAGES(CSHAKE_STAGES), .S_VALUE(1'b1), .DATA_80BYTE(1'b0)
     ) Cshake2 (
         .clk(clk), .rst(rst),
         .data_in({384'b0, digest}),
