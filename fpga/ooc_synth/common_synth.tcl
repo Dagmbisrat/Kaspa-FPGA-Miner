@@ -16,7 +16,9 @@
 #   CLK_PORT   clk               ; # name of the clock input port
 #   HAS_CLK    1                 ; # set 0 for purely combinational IP
 #                                 ; # (skips create_clock/timing reports)
-#   OUT_DIR    reports/$TOP
+#   OUT_DIR    reports/$TOP[/clk<CLK_NS>_<generics>]  ; # param subfolder is
+#                                 ; # auto-derived (see below) unless you
+#                                 ; # override it
 #   GENERICS   {}                ; # Tcl list of "PARAM=VALUE" strings passed
 #                                 ; # to synth_design as -generic overrides,
 #                                 ; # e.g. {CSHAKE_STAGES=24 MATMUL_STAGES=8}
@@ -42,8 +44,27 @@ if {![info exists PART]}     { set PART   xc7k70tfbg676-1 }
 if {![info exists CLK_NS]}   { set CLK_NS 5.0 }
 if {![info exists CLK_PORT]} { set CLK_PORT clk }
 if {![info exists HAS_CLK]}  { set HAS_CLK 1 }
-if {![info exists OUT_DIR]}  { set OUT_DIR "reports/$TOP" }
 if {![info exists GENERICS]} { set GENERICS {} }
+
+# Default OUT_DIR is keyed by the params this run used (clock + generics), so
+# e.g. `ooc core 4.0 24 8 0` and `ooc core 4.0 24 8 1` land in separate
+# subfolders instead of one clobbering the other's reports. Runs with the
+# exact same params still land in the same folder and overwrite each other,
+# which is intentional (a re-run, not a new datapoint) - reports/summary.csv
+# keeps every run's row regardless.
+if {![info exists OUT_DIR]} {
+    set param_tag ""
+    if {$HAS_CLK} { set param_tag "clk${CLK_NS}" }
+    foreach g $GENERICS {
+        if {$param_tag ne ""} { append param_tag "_" }
+        append param_tag [string map {= {}} $g]
+    }
+    if {$param_tag eq ""} {
+        set OUT_DIR "reports/$TOP"
+    } else {
+        set OUT_DIR "reports/$TOP/$param_tag"
+    }
+}
 
 ;# Trimmed: the cmd.exe/VIVADO_BAT path (`set OOC_THREADS=4 && ...`) leaves a
 ;# trailing space in the forwarded value, which set_param's strict int check

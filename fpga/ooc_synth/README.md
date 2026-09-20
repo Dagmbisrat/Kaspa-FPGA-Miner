@@ -28,9 +28,12 @@ cmd.exe /c 'G:\...\vivado.bat -mode batch -source core.tcl -tclargs 4.0 24 16'
 
 ## Output
 
-- **`reports/<module>/<module>_summary.txt`** — read this first: fits?
-  (any resource >100%), the raw Slice Logic table, meets clock? (WNS + real
-  Fmax). Also printed to console.
+- **`reports/<module>/<params>/<module>_summary.txt`** — read this first:
+  fits? (any resource >100%), the raw Slice Logic table, meets clock? (WNS +
+  real Fmax). Also printed to console. `<params>` is auto-derived from the
+  clock + generics the run used (e.g. `clk4.0_CSHAKE_STAGES24_MATMUL_STAGES8_CSHAKE_FOLDED1`),
+  so different param combos for the same module land in separate folders
+  instead of overwriting each other.
 - `*_utilization.rpt` / `*_timing_summary.rpt` / `*_timing_max.rpt` — full
   detail, only needed once the summary flags something.
 - `reports/summary.csv` — one row per run, for comparing runs.
