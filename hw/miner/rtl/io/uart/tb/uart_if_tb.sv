@@ -2,8 +2,7 @@
 // uart_if_tb -- self-checking bench for the UART transport adapter.
 // No physical UART PHY is simulatable in Verilator, so this bench IS the
 // host: it bit-bangs request frames onto the DUT's rx pin and bit-bangs
-// received bytes off its tx pin (see ../../../../uart_if_design.md and
-// hw/miner/rtl/Notes.txt, "verify without a PHY").
+// received bytes off its tx pin (see docs/miner/io/uart_if.md).
 module uart_if_tb;
 
     localparam int CLK_FREQ_HZ = 16_000_000;
