@@ -226,7 +226,7 @@ if (!FOLDED) begin : g_unfolded
     end
 
     assign hash_out  = kstate[STAGES-1][255:0];
-    assign valid_out = valid_sr[LAT-2];  // aligns valid_out with hash_out (kstate[STAGES-1])
+    assign valid_out = valid_sr[LAT-1];  // aligns valid_out with hash_out (kstate[STAGES-1])
     assign busy      = 1'b0;             // no fold, no re-entry handshake needed
 
 end else begin : g_folded

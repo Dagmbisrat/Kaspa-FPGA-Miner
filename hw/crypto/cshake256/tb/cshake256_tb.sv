@@ -116,16 +116,18 @@ task automatic send_batch(input int start_idx, input int count, input bit mode);
     int ti, b;
     for (ti = start_idx; ti < start_idx + count; ti++) begin
         b           = ti * WORDS_PER_TEST;
+        exp_hash[ti - start_idx] = {vectors[b+14], vectors[b+13],
+                                     vectors[b+12], vectors[b+11]};
+        // data_in and valid_in asserted together (both after this #1) so
+        // data_in can't race the previous edge's pr0 capture.
+        #1;
         data_in     = {vectors[b+10], vectors[b+9], vectors[b+8],
                        vectors[b+7],  vectors[b+6], vectors[b+5],
                        vectors[b+4],  vectors[b+3], vectors[b+2],
                        vectors[b+1]};
-        exp_hash[ti - start_idx] = {vectors[b+14], vectors[b+13],
-                                     vectors[b+12], vectors[b+11]};
+        if (mode) valid_in_hh = 1; else valid_in_pow = 1;
         $display("  TX[%0d]  mode=%0b  data=%h",
                  ti, mode, data_in[255:0]); // show first 256 bits
-        #1;
-        if (mode) valid_in_hh = 1; else valid_in_pow = 1;
         @(posedge clk);          // input sampled here; next input follows next cycle
     end
     #1 valid_in_hh = 0; valid_in_pow = 0;
@@ -146,17 +148,18 @@ task automatic send_and_collect_one(input int ti, input bit mode, input string l
     int b;
     logic [255:0] exp, got;
     b   = ti * WORDS_PER_TEST;
+    exp = {vectors[b+14], vectors[b+13], vectors[b+12], vectors[b+11]};
+
+    if (mode) while (busy_hh)  @(posedge clk);
+    else      while (busy_pow) @(posedge clk);
+    // data_in and valid_in asserted together (see send_batch).
+    #1;
     data_in = {vectors[b+10], vectors[b+9], vectors[b+8],
                vectors[b+7],  vectors[b+6], vectors[b+5],
                vectors[b+4],  vectors[b+3], vectors[b+2],
                vectors[b+1]};
-    exp = {vectors[b+14], vectors[b+13], vectors[b+12], vectors[b+11]};
-    $display("  TX[%0d]  mode=%0b  data=%h", ti, mode, data_in[255:0]);
-
-    if (mode) while (busy_hh)  @(posedge clk);
-    else      while (busy_pow) @(posedge clk);
-    #1;
     if (mode) valid_in_hh = 1; else valid_in_pow = 1;
+    $display("  TX[%0d]  mode=%0b  data=%h", ti, mode, data_in[255:0]);
     @(posedge clk);
     #1;
     if (mode) valid_in_hh = 0; else valid_in_pow = 0;
