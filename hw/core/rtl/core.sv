@@ -11,8 +11,18 @@
 // a matched delay line so each streamed hash_out is tagged with its nonce.
 // ---------------------------------------------------------------------------
 module core #(
-    parameter int CSHAKE_STAGES = 24,  // cSHAKE pipeline layers; must divide 24
-    parameter int MATMUL_STAGES = 8    // matmul pipeline layers; must divide 64
+    parameter int CSHAKE_STAGES = 24,     // cSHAKE pipeline layers; must divide 24
+    parameter int MATMUL_STAGES = 8,      // matmul pipeline layers; must divide 64
+    // Shared by both cSHAKE instances (not independent): Cshake1/Cshake2 are
+    // equal-cost, so folding only one would still cap throughput to the
+    // folded one's rate while wasting the other's area savings -- fold both
+    // or neither. This also sidesteps a correctness issue found in the
+    // mixed case: an unfolded cshake fed single isolated pulses (as the
+    // g_serialized admission below does once folding is in play) showed a
+    // one-cycle valid_out/hash_out misalignment not seen when both
+    // instances share the same fold state. Both-folded and both-unfolded
+    // are verified correct; mixed is not supported.
+    parameter bit CSHAKE_FOLDED = 1'b0
 ) (
     input  logic         clk,
     input  logic         rst,
@@ -34,10 +44,29 @@ module core #(
 );
 
     // ---- Pipeline latencies ----
-    localparam int C_LAT     = CSHAKE_STAGES + 2;      // cSHAKE valid_in->valid_out
-    localparam int M_LAT     = MATMUL_STAGES;          // matmul valid_in->valid_out
-    localparam int TOTAL_LAT = C_LAT + M_LAT + C_LAT;  // cshake1 + matmul + cshake2
-    localparam int WID       = 8;                      // work/job id width
+    localparam int M_LAT = MATMUL_STAGES;   // matmul valid_in->valid_out
+    localparam int WID   = 8;               // work/job id width
+
+    // Cshake's own per-item PROCESSING latency (admit -> THIS item's own
+    // valid_out), regardless of admission rate. Matches
+    // cshake256_pipelined_core's own internal LAT parameter exactly in
+    // both fold modes.
+    localparam int C_LAT_CSHAKE = CSHAKE_FOLDED ? (24/CSHAKE_STAGES + 2) : (CSHAKE_STAGES + 2);
+
+    // Cshake's own admission RATE (how often a NEW item can be accepted).
+    // Folded: single-token, admission rate == processing latency.
+    // Unfolded: busy hardwired 0, no gating -- a new item every cycle.
+    localparam int N_CSHAKE = CSHAKE_FOLDED ? C_LAT_CSHAKE : 1;
+
+    // matmul's own sustainable admission rate (hardcoded 1 -- no fold
+    // support today; the one line to change if/when matmul ever gains its
+    // own FOLDED parameter).
+    localparam int N_MATMUL = 1;
+
+    localparam int N_MAX = (N_CSHAKE > N_MATMUL) ? N_CSHAKE : N_MATMUL;
+
+    // Fixed round-trip PROCESSING latency: cshake1 + matmul + cshake2.
+    localparam int TOTAL_LAT = C_LAT_CSHAKE + M_LAT + C_LAT_CSHAKE;
 
     // ---- Control FSM ----
     // IDLE -> GEN (new matrix) -> LOAD (rebuild matmul KCM tables) -> STREAM.
@@ -121,7 +150,9 @@ module core #(
     // Streaming pipeline
     // ======================================================================
     logic stream_valid;
-    assign stream_valid = (state == STREAM);
+    logic admit;
+    logic c1_busy, c2_busy;
+    logic [WID-1:0] work_out;
 
     // 80-byte header: pre_pow_hash | timestamp | 256'b0 | nonce
     logic [639:0] header;
@@ -131,13 +162,15 @@ module core #(
     logic [255:0] pow_hash;
     logic         c1_valid;
     cshake256_pipelined_core #(
-        .STAGES(CSHAKE_STAGES), .S_VALUE(1'b0), .DATA_80BYTE(1'b1)
+        .FOLDED(CSHAKE_FOLDED), .STAGES(CSHAKE_STAGES),
+        .S_VALUE(1'b0), .DATA_80BYTE(1'b1)
     ) Cshake1 (
         .clk(clk), .rst(rst),
         .data_in(header),
         .valid_in(stream_valid),
         .hash_out(pow_hash),
-        .valid_out(c1_valid)
+        .valid_out(c1_valid),
+        .busy(c1_busy)
     );
 
     // matmul: vector_in = pow_hash directly (swapped nibble packing matches).
@@ -172,43 +205,89 @@ module core #(
 
     // cSHAKE2 (HeavyHash, 32-byte) -> final hash
     cshake256_pipelined_core #(
-        .STAGES(CSHAKE_STAGES), .S_VALUE(1'b1), .DATA_80BYTE(1'b0)
+        .FOLDED(CSHAKE_FOLDED), .STAGES(CSHAKE_STAGES),
+        .S_VALUE(1'b1), .DATA_80BYTE(1'b0)
     ) Cshake2 (
         .clk(clk), .rst(rst),
         .data_in({384'b0, digest}),
         .valid_in(m_valid),
         .hash_out(hash_out),
-        .valid_out(valid_out)
+        .valid_out(valid_out),
+        .busy(c2_busy)
     );
 
-    // Carry the nonce alongside the whole pipeline so hits map back to a nonce.
-    logic [63:0] nonce_delay [0:TOTAL_LAT-1];
+    // ======================================================================
+    // Admission control: a single periodic counter paced at N_MAX =
+    // max(cshake's own rate, matmul's own rate), direct unbuffered wiring
+    // to Matmul/Cshake2 (already unconditional at module scope), and a tag
+    // FIFO spanning the admit -> final-valid_out round trip. Degenerates to
+    // N_MAX=1 in the default/unfolded config, where admit_ctr is provably
+    // pinned at 0 forever and admit reduces to exactly (state==STREAM) --
+    // bit-for-bit identical to the pipeline's original admission timing.
+    // ======================================================================
+    localparam int N_MAX_BITS = (N_MAX > 1) ? $clog2(N_MAX) : 1;
+    logic [N_MAX_BITS-1:0] admit_ctr;
     always_ff @(posedge clk or posedge rst) begin
-        if (rst)
-            for (int k = 0; k < TOTAL_LAT; k++) nonce_delay[k] <= '0;
-        else begin
-            nonce_delay[0] <= nonce_ctr;
-            for (int k = 1; k < TOTAL_LAT; k++) nonce_delay[k] <= nonce_delay[k-1];
-        end
+        if (rst || start || state != STREAM) admit_ctr <= '0;
+        else if (admit_ctr == N_MAX-1)        admit_ctr <= '0;
+        else                                   admit_ctr <= admit_ctr + 1'b1;
     end
-    assign nonce_out = nonce_delay[TOTAL_LAT-1];
+    assign admit = (state == STREAM) && (admit_ctr == '0) && !c1_busy;
 
-    // Carry the work id alongside so a hit is attributed to the right job and
-    // stale in-flight results from a previous job are ignored.
-    logic [WID-1:0] work_delay [0:TOTAL_LAT-1];
+    // ---- Tag FIFO: push on admit, pop on final valid_out. Sized to the
+    // exact peak occupancy (P=N_MAX push spacing, L=TOTAL_LAT item
+    // lifetime, peak = ceil(L/P)) -- no power-of-2 padding, explicit
+    // wraparound compare instead. ----
+    localparam int TAG_SLOTS = (TOTAL_LAT + N_MAX - 1) / N_MAX;
+    localparam int TAG_ABITS = (TAG_SLOTS <= 1) ? 1 : $clog2(TAG_SLOTS);
+
+    logic [63:0]    tag_nonce [0:TAG_SLOTS-1];
+    logic [WID-1:0] tag_work  [0:TAG_SLOTS-1];
+    logic [TAG_ABITS-1:0] tag_wr_ptr, tag_rd_ptr;
+
     always_ff @(posedge clk or posedge rst) begin
-        if (rst)
-            for (int k = 0; k < TOTAL_LAT; k++) work_delay[k] <= '0;
-        else begin
-            work_delay[0] <= work_id;
-            for (int k = 1; k < TOTAL_LAT; k++) work_delay[k] <= work_delay[k-1];
+        if (rst) begin
+            tag_wr_ptr <= '0; tag_rd_ptr <= '0;
+        end else begin
+            // Not reset by `start` (only rst) -- an abandoned in-flight
+            // entry still drains and gets correctly rejected by the
+            // work_out==work_id staleness check below.
+            if (admit) begin
+                tag_nonce[tag_wr_ptr] <= nonce_ctr;
+                tag_work[tag_wr_ptr]  <= work_id;
+                tag_wr_ptr <= (tag_wr_ptr == TAG_SLOTS-1) ? '0 : tag_wr_ptr + 1'b1;
+            end
+            if (valid_out) tag_rd_ptr <= (tag_rd_ptr == TAG_SLOTS-1) ? '0 : tag_rd_ptr + 1'b1;
         end
     end
+    assign nonce_out = tag_nonce[tag_rd_ptr];
+    assign work_out  = tag_work[tag_rd_ptr];
+
+    `ifndef SYNTHESIS
+    logic [31:0] tag_occ;
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst) tag_occ <= '0;
+        else     tag_occ <= tag_occ + (admit ? 32'd1 : 32'd0) - (valid_out ? 32'd1 : 32'd0);
+    end
+    always_ff @(posedge clk)
+        if (!rst) assert (tag_occ <= TAG_SLOTS) else
+            $fatal(1, "tag FIFO overflow: occ=%0d slots=%0d", tag_occ, TAG_SLOTS);
+
+    // matmul's own KCM-rebuild busy can squash a valid_in with no
+    // corresponding valid_out ever appearing -- unrelated to admission,
+    // kept as regression-proofing. Margin holds identically in both fold
+    // modes (matrix_generator's GEN phase is >=256 cycles regardless;
+    // worst-case C_LAT_CSHAKE is 26 either way).
+    always_ff @(posedge clk)
+        if (!rst) assert (!(c1_valid && mm_busy)) else
+            $fatal(1, "cshake1 valid_out collided with matmul KCM reload -- token silently dropped");
+    `endif
+
+    assign stream_valid = admit;
 
     // Target compare (tail stage). kaspad's pow.toBig() treats the hash as
     // little-endian, which is exactly how hash_out is packed, so the raw 256-bit
     // hash_out <= target matches kaspad's CheckProofOfWork (no byte swap).
-    wire [WID-1:0] work_out = work_delay[TOTAL_LAT-1];
     wire hit = valid_out && (work_out == work_id) && (hash_out <= tgt_reg);
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -276,7 +355,7 @@ module core #(
                         if (load_seen && !mm_busy) state     <= STREAM;
                     end
                     STREAM: begin
-                        nonce_ctr <= nonce_ctr + 64'd1;
+                        if (admit) nonce_ctr <= nonce_ctr + 64'd1;
                     end
                     default: ; // IDLE waits for start
                 endcase

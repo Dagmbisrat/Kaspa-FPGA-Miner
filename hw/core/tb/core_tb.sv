@@ -16,6 +16,7 @@ module core_tb;
 
     parameter int CSHAKE_STAGES = 24;   // forwarded to the DUT (override via -G)
     parameter int MATMUL_STAGES = 8;
+    parameter bit CSHAKE_FOLDED = 1'b0; // fold both cSHAKE instances
 
     localparam int NVEC       = 32;
     localparam int NUM_PHASES = 3;
@@ -37,8 +38,9 @@ module core_tb;
     logic [7:0]   found_work_id;
 
     core #(
-        .CSHAKE_STAGES (CSHAKE_STAGES),
-        .MATMUL_STAGES (MATMUL_STAGES)
+        .CSHAKE_STAGES(CSHAKE_STAGES),
+        .MATMUL_STAGES(MATMUL_STAGES),
+        .CSHAKE_FOLDED(CSHAKE_FOLDED)
     ) uut (
         .clk          (clk),
         .rst          (rst),
@@ -79,7 +81,23 @@ module core_tb;
         rd256 = {mem[off+3], mem[off+2], mem[off+1], mem[off+0]};
     endfunction
 
-    task automatic run_phase(input int p);
+    // Pulse `start` to load phase p's block/nonce/target. Does not wait for
+    // or drain anything -- factored out so run_interrupt_test can fire a
+    // second start before the first phase's checking loop would return.
+    task automatic start_phase(input int p);
+        begin
+            @(negedge clk);
+            start        = 1'b1;
+            pre_pow_hash = ph_pph[p];
+            timestamp    = ph_ts[p];
+            nonce        = ph_base[p];
+            target       = ph_tgt[p];
+            @(negedge clk);
+            start        = 1'b0;
+        end
+    endtask
+
+    task automatic check_phase(input int p);
         logic [NVEC-1:0] got;
         logic [NVEC-1:0] fnd;
         integer nchecked;
@@ -89,15 +107,6 @@ module core_tb;
         logic e;
         begin
             got = '0; fnd = '0; nchecked = 0; guard = 0;
-
-            @(negedge clk);
-            start        = 1'b1;
-            pre_pow_hash = ph_pph[p];
-            timestamp    = ph_ts[p];
-            nonce        = ph_base[p];
-            target       = ph_tgt[p];
-            @(negedge clk);
-            start        = 1'b0;
 
             while (nchecked < NVEC && guard < 60000) begin
                 @(posedge clk);
@@ -156,6 +165,31 @@ module core_tb;
         end
     endtask
 
+    task automatic run_phase(input int p);
+        begin
+            start_phase(p);
+            check_phase(p);
+        end
+    endtask
+
+    // Fires `start` for p_old, waits just long enough for at most one
+    // admission, then immediately fires `start` for p_new before p_old's
+    // token could possibly have drained (critical under a folded build,
+    // where a fold takes many cycles) -- and checks p_new as normal. This
+    // exercises core.sv's admit_ctr/tag-FIFO admission scheme: p_old's
+    // abandoned in-flight token must not corrupt p_new's nonce/work_id
+    // tagging (the tag FIFO is deliberately NOT reset on `start`, so
+    // p_old's real, stale valid_out still drains through it and is
+    // rejected by the work_out==work_id staleness check).
+    task automatic run_interrupt_test(input int p_old, input int p_new);
+        begin
+            start_phase(p_old);
+            repeat (2) @(posedge clk);
+            start_phase(p_new);
+            check_phase(p_new);
+        end
+    endtask
+
     integer p, i, off;
     initial begin
         $dumpfile("sim/core_tb.vcd");
@@ -186,6 +220,10 @@ module core_tb;
 
         for (p = 0; p < NUM_PHASES; p = p + 1)
             run_phase(p);
+
+        $display("");
+        $display("=== Interrupt test: start(1) then start(2) mid-flight ===");
+        run_interrupt_test(1, 2);
 
         $display("");
         $display("=================================================");

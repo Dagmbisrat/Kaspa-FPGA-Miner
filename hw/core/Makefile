@@ -13,6 +13,7 @@ MATMUL   = ../matrix/matmul_unit
 JOBS          ?= 4
 CSHAKE_STAGES ?= 24    # cSHAKE pipeline layers; must divide 24
 MATMUL_STAGES ?= 8     # matmul pipeline layers; must divide 64
+CSHAKE_FOLDED ?= 0     # fold both cSHAKE instances; 0=unfolded (default)
 
 SRC = \
     $(KECCAK)/rtl/keccak_round.sv \
@@ -40,6 +41,7 @@ help:
 	@echo "Variables (make TARGET VAR=value):"
 	@echo "  CSHAKE_STAGES=$(CSHAKE_STAGES)  - cSHAKE pipeline depth, must divide 24"
 	@echo "  MATMUL_STAGES=$(MATMUL_STAGES)   - matmul pipeline depth, must divide 64"
+	@echo "  CSHAKE_FOLDED=$(CSHAKE_FOLDED) - fold both cSHAKE instances (must match -- mixed is unsupported)"
 	@echo "  JOBS=$(JOBS)          - Parallel Verilator / C++ build jobs"
 
 all: runtest
@@ -52,6 +54,7 @@ vectors: $(VECTORS)
 runtest: $(VECTORS)
 	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal --top-module $(TOP) \
 		  -GCSHAKE_STAGES=$(CSHAKE_STAGES) -GMATMUL_STAGES=$(MATMUL_STAGES) \
+		  -GCSHAKE_FOLDED=$(CSHAKE_FOLDED) \
 		  --Mdir $(OBJDIR) $(SRC) $(TB)
 	$(OBJDIR)/V$(TOP)
 	@python3 ../tools/fpga_estimate.py core CSHAKE_STAGES=$(CSHAKE_STAGES) MATMUL_STAGES=$(MATMUL_STAGES)

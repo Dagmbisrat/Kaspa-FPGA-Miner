@@ -6,12 +6,14 @@
 
 `core` is the top-level kHeavyHash mining engine, built as a **streaming
 pipeline**: given a block (`pre_pow_hash`, `timestamp`, starting `nonce`), it
-sweeps nonces and emits **one finished hash per clock cycle**, each tagged with
-the nonce that produced it.
+sweeps nonces and admits a new one every `N_MAX` cycles — `N_MAX` tracking
+whichever IP is currently slowest (1 cycle/hash if nothing is folded, more
+if any IP is folded) — each tagged with the nonce that produced it. See
+[Admission pacing](#admission-pacing--nonce-tagging).
 
 The 64×64 matrix is **constant per block**, so it is generated once (blocking)
 and then held in the cache while nonces stream through a feed-forward chain of
-three 1-result/cycle IPs:
+three IPs, each running at its own sustainable rate:
 
 ```
   nonce++ ─► cshake1 ─► matmul ─► XOR(pow_hash) ─► cshake2 ─► hash_out
@@ -20,7 +22,7 @@ three 1-result/cycle IPs:
 
 This replaces the earlier per-nonce sequential FSM: matrix generation is
 amortised across the whole block, and after the fill latency the pipeline
-sustains 1 nonce/cycle.
+sustains 1 nonce every `N_MAX` cycles.
 
 ---
 
@@ -32,6 +34,7 @@ sustains 1 nonce/cycle.
 |:--------------- |:-------:|:-------------------------------------------------- |
 | `CSHAKE_STAGES` | 24      | cSHAKE pipeline layers (both cores). Must divide 24.|
 | `MATMUL_STAGES` | 8       | matmul pipeline layers. Must divide 64.            |
+| `CSHAKE_FOLDED` | 0       | Fold both cSHAKE cores (area↓, throughput↓). Shared — mixed folded/unfolded not supported. |
 
 ### Ports
 
@@ -84,8 +87,9 @@ to `STREAM`.
 - **LOAD** — matmul rebuilds its per-cell product tables from the new matrix
   (~1024 cycles); wait for `busy` to rise then fall (`load_seen`), then stream.
   `valid_in` stays 0.
-- **STREAM** — free-run `nonce_ctr`, assert `valid_in` every cycle. Stays here
-  streaming; a new `start` reloads and repeats the decision.
+- **STREAM** — admit a new nonce whenever `admit` fires (paced at `N_MAX`,
+  see below); `nonce_ctr` only advances on `admit`. Stays here streaming; a
+  new `start` reloads and repeats the decision.
 
 Matrix (re)generation and the table rebuild therefore happen **only on a new
 block**; identical `pre_pow_hash` re-uses the cached matrix and tables and
@@ -127,14 +131,37 @@ digest. Since the matmul adds `M_LAT = MATMUL_STAGES` cycles, `pow_hash` is
 delayed by `M_LAT` in a shift register so nonce N's product meets nonce N's
 `pow_hash`.
 
-### Nonce tagging
+### Admission pacing & nonce tagging
 
-The hash carries no nonce, so `nonce_ctr` is shifted down a delay line matched to
-the full pipeline latency and presented as `nonce_out`, aligned with `hash_out`:
+Each IP has its own sustainable rate; `core` admits at the **slowest** one —
+it only needs each IP's rate, not *why* it's that rate:
 
 ```
-  TOTAL_LAT = C_LAT + M_LAT + C_LAT ,  C_LAT = CSHAKE_STAGES + 2 ,  M_LAT = MATMUL_STAGES
+  N_CSHAKE = 1                (unfolded: no gating, 1 admit/cycle)
+           = C_LAT_CSHAKE     (folded: single-token, busy-gated)
+  N_MATMUL = 1                (no fold support yet)
+  N_MAX    = max(N_CSHAKE, N_MATMUL)
+
+  admit_ctr:  0 → 1 → ... → N_MAX-1 → 0 → ...      (free-running in STREAM)
+  admit    =  (state==STREAM) && (admit_ctr==0) && !cshake1.busy
 ```
+
+Default (`CSHAKE_FOLDED=0`) → `N_MAX=1` → `admit_ctr` pinned at 0 → `admit`
+every cycle, same as before folding existed.
+
+The hash carries no nonce, so a small circular **tag FIFO** carries it (and
+`work_id`) from admission to the matching `valid_out`:
+
+```
+  admit ──push(nonce,work_id)──► tag FIFO ──pop on valid_out──► nonce_out/work_out
+                                  TAG_SLOTS = ceil(TOTAL_LAT / N_MAX)
+
+  TOTAL_LAT = C_LAT_CSHAKE + M_LAT + C_LAT_CSHAKE   (round-trip: cshake1+matmul+cshake2)
+```
+
+Sized to the exact peak occupancy — no slack, no power-of-2 padding. Not
+reset on `start`, so a job interrupted mid-flight still drains its stale
+result, harmlessly rejected by the `work_out == work_id` check below.
 
 The one-time `LOAD` table rebuild (~1024 cycles per new block) is **not** part of
 `TOTAL_LAT` — it is a gap before streaming, not steady-state latency.
@@ -204,16 +231,21 @@ A Verilator testbench (`tb/core_tb.sv`) drives the core from the Python referenc
 its `nonce_out`:
 
 ```
-make runtest                     # gen vectors, build, run
+make runtest                     # gen vectors, build, run (unfolded, N_MAX=1)
 make runtest MATMUL_STAGES=16    # override pipeline depth (must divide 64)
 make runtest CSHAKE_STAGES=12    # override cSHAKE depth (must divide 24)
+make runtest CSHAKE_FOLDED=1     # fold both cSHAKE cores (N_MAX=C_LAT_CSHAKE)
 ```
 
 - Phase 0: fresh matrix generation (block A)
 - Phase 1: cache-hit re-use (block A, new nonce base)
 - Phase 2: block switch + regeneration (block B)
+- Interrupt test: `start` mid-stream on a second job — checks the tag FIFO
+  correctly discards the abandoned job's stale in-flight result
 
-All 96 streamed hashes and 96 target-compare decisions match the reference (192 checks) at 1 nonce/cycle.
+All streamed hashes and target-compare decisions match the reference, for
+both `CSHAKE_FOLDED` modes across several `CSHAKE_STAGES`/`MATMUL_STAGES`
+combinations.
 
 ---
 
