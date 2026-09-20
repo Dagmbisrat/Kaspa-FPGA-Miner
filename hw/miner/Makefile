@@ -42,6 +42,14 @@ help:
 	@echo "  make wave        - Run and open the waveform in GTKWave"
 	@echo "  make vectors     - Regenerate hw/core's Python-reference vectors"
 	@echo "  make clean       - Remove generated files"
+	@echo ""
+	@echo "Variables (make TARGET VAR=value) -- forwarded to the core instance inside work_controller_tb:"
+	@echo "  CSHAKE_STAGES=$(CSHAKE_STAGES)   - cSHAKE pipeline depth, must divide 24"
+	@echo "  MATMUL_STAGES=$(MATMUL_STAGES)   - matmul pipeline depth, must divide 64"
+	@echo "  CSHAKE_FOLDED=$(CSHAKE_FOLDED)   - fold both cSHAKE instances (default 1: slow admission on"
+	@echo "                       purpose, so test2's register-bus pops can keep pace -- see"
+	@echo "                       work_controller_tb.sv's header comment before changing this)"
+	@echo "  JOBS=$(JOBS)             - Parallel Verilator / C++ build jobs"
 
 $(VECTORS):
 	$(MAKE) -C $(CORE) vectors

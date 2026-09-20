@@ -38,7 +38,7 @@ stable that same cycle:
           └──┘  └──┘  └──┘  └──┘
  addr   ──< 0x00      >───────────   (stable while we/re is high)
  we     ────┐  ┌───────────────      (write: register wdata this edge)
-             └──┘
+            └──┘
  re     ────────────┐  ┌───────      (read: rdata must be valid NEXT cycle)
                      └──┘
  rdata  ─────────────────< valid >──
@@ -109,13 +109,13 @@ which case it is.
 
 ```
  HOST (via uart_if)              work_controller                    core
-   │                                    │                             │
+   │                                    │                              │
    │ write PPH[0..7]   (8 words)  ────► │ pph_reg  <= wdata            │
    │ write TIMESTAMP[0..1] (2)    ────► │ ts_reg   <= wdata            │
    │ write TARGET[0..7]   (8)     ────► │ tgt_reg  <= wdata            │
    │ write NONCE_BASE[0..1] (2)   ────► │ nonce_reg<= wdata            │
    │ write CTRL = 1 (START)       ────► │ start <= 1 (1 clk) ────────► │ loads pph/ts/nonce/target,
-   │                                    │                             │ begins streaming
+   │                                    │                              │ begins streaming
 ```
 
 18 word-writes to stage the job, then one `CTRL` write to fire it — matches
@@ -131,10 +131,10 @@ when the host explicitly reads the low nonce word:
 
 ```
  core                    work_controller                      HOST (via uart_if)
-  │ found=1                  │                                        │
+  │ found=1                  │                                         │
   │ found_nonce=N       ────►│ push {N, found_work_id} → FIFO          │
   │ found_work_id=W          │ FOUND_COUNT++                           │
-  │                          │                                        │
+  │                          │                                         │
   │                          │ ◄──── read FOUND_COUNT (0x64) ──────────│  host polls
   │                          │ ──── 1 ────────────────────────────────►│
   │                          │ ◄──── read FOUND_NONCE[0] (0x58) ───────│  ***pops FIFO here***
