@@ -123,3 +123,38 @@ jobs:
           name: waveforms-${{ github.job }}-${{ strategy.job-index }}
           path: hw/**/sim/*.vcd
           if-no-files-found: ignore
+
+  # kaspa_miner: same CSHAKE_FOLDED/CSHAKE_STAGES boundary configs as
+  # test-core, run through the full UART round trip instead of core's direct
+  # register bus. This is an integration smoke test, not a hashing-
+  # correctness re-check (test-core already covers that faster) - so it only
+  # mirrors the same 3 configs, not the full parameter sweep.
+  test-kaspa-miner:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            cshake_folded: 0
+            cshake_stages: 24
+          - name: folded-min
+            cshake_folded: 1
+            cshake_stages: 1
+          - name: folded-mid
+            cshake_folded: 1
+            cshake_stages: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sim-env
+
+      - name: kaspa_miner (${{ matrix.name }})
+        run: make -C hw/miner/kaspa_miner runtest CSHAKE_FOLDED=${{ matrix.cshake_folded }} CSHAKE_STAGES=${{ matrix.cshake_stages }}
+
+      - name: Upload waveforms on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: waveforms-${{ github.job }}-${{ strategy.job-index }}
+          path: hw/**/sim/*.vcd
+          if-no-files-found: ignore
