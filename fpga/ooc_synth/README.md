@@ -47,6 +47,7 @@ cmd.exe /c 'G:\...\vivado.bat -mode batch -source core.tcl -tclargs 4.0 24 16'
 | `cshake256_core.tcl`           | `cshake256_pipelined_core`  | `CLK_NS STAGES S_VALUE DATA_80BYTE FOLDED` |
 | `xoshiro256pp.tcl`             | `xoshiro256pp`              | none (combinational) |
 | `matrix_generator.tcl`         | `matrix_generator`          | none |
+| `matrix_rankcheck.tcl`         | `matrix_rankcheck`          | none (fixed `CLK_NS=5.0`, no `-tclargs`) |
 | `matmul_pipelined_unit.tcl`    | `matmul_pipelined_unit`     | `CLK_NS NUM_STAGES INTERNAL_MATRIX` |
 | `core.tcl`                     | `core`                      | `CLK_NS CSHAKE_STAGES MATMUL_STAGES CSHAKE_FOLDED` |
 | `kaspa_miner.tcl`              | `kaspa_miner`               | `CLK_NS CSHAKE_STAGES MATMUL_STAGES CSHAKE_FOLDED CLK_FREQ_HZ BAUD_RATE` |

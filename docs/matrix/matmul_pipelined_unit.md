@@ -313,7 +313,8 @@ make runtest  NUM_STAGES=N    # build with N pipeline layers (N | 64)
   reference while asserting exactly one `valid_out` per vector, `LAT` cycles
   behind the input stream.
 - Both modes pass 64/64 at 1 vector/cycle for `NUM_STAGES` ∈ {1, 4, 8, 16, 64}.
-  `hw/core runtest` covers the wired build end-to-end (192/192).
+  `hw/core runtest` covers the wired build end-to-end (256/256, including
+  the interrupt test).
 
 ---
 

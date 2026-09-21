@@ -11,10 +11,10 @@ the **UART wire protocol** — how bytes on TX/RX map onto reads/writes of
 `work_controller`'s register map.
 
 Implemented in [`hw/io/uart/rtl/uart_if.sv`](../../hw/io/uart/rtl/uart_if.sv),
-verified by [`tb/uart_if_tb.sv`](../../hw/io/uart/tb/uart_if_tb.sv) against
-a stand-in register-bus memory, not a real
-[`work_controller`](../work_controller.md) — the two haven't been wired
-together and tested end to end yet.
+verified on its own by [`tb/uart_if_tb.sv`](../../hw/io/uart/tb/uart_if_tb.sv)
+against a stand-in register-bus memory, not a real
+[`work_controller`](../work_controller.md) — the two are wired together and
+tested end to end in [`kaspa_miner`](../kaspa_miner.md).
 
 `uart_if` only knows bytes-in/bytes-out and the register bus. It has no idea
 what `CTRL` or `TARGET` mean — that's `work_controller`'s job.
@@ -191,4 +191,6 @@ stray non-SOF byte before a valid frame (expect `WAIT_SOF` to resync).
 
 ## References
 
+- [`work_controller.md`](../work_controller.md) — the register-bus slave this interface drives
+- [`kaspa_miner.md`](../kaspa_miner.md) — where this is wired to `work_controller` and `core` end to end
 - [`core.md`](../core/core.md) — the `core` IP this interface feeds

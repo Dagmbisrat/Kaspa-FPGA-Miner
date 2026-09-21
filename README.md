@@ -2,7 +2,7 @@
 
 An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, built so it can actually be flashed and run on the Xilinx Kintex-7 FPGAs people have — from small development boards up to the **XC7K325T** for those chasing maximum throughput.
 
-> ⚠️ **Status:** Work in progress — streaming core (folded and unfolded modes) with difficulty compare verified in simulation, plus a `work_controller` register map and `uart_if` UART transport adapter, each verified in isolation; next up is wiring all three into a single flashable `kaspa_miner` top level, then synthesis/timing and multi-core scaling.
+> ⚠️ **Status:** Work in progress — streaming core (folded and unfolded modes) with difficulty compare, a `work_controller` register map, a `uart_if` UART transport adapter, and `kaspa_miner` (all three wired together into a single flashable top level) are built and verified end-to-end in simulation; next up is synthesis/timing closure, then multi-core scaling.
 
 ---
 
@@ -105,9 +105,17 @@ swapping transports means zero changes here. See
 frame. Simple and fully Verilator-simulatable without a real PHY, so it's
 the bring-up path before PCIe. See [uart_if.md](docs/io/uart_if.md).
 
+`kaspa_miner` wires `uart_if`, `work_controller`, and `core` together into
+the first complete, flashable single-core miner — the top-level module
+that's actually buildable today, verified end to end (host UART bytes in,
+a real found nonce back out) in [kaspa_miner.md](docs/kaspa_miner.md).
+
 ```
-Host (PC) ── UART ──► uart_if ── reg bus ──► work_controller ──► core × N ──► Result FIFO
+Host (PC) ── UART ──► uart_if ── reg bus ──► work_controller ──► core ──► found FIFO
+                       └──────────────────── kaspa_miner (today) ────────────────────┘
 ```
+
+Multi-core (`core × N` sharing one `work_controller`) is Phase 3, not yet built.
 
 A **PCIe accelerator** is the intended production interface, added later as
 a second register-bus adapter (hard block + AXI-Lite) with no changes to
@@ -170,13 +178,16 @@ behavioral bit-bang UART host model (no real PHY needed), and
 `work_controller` drives a real `core` instance directly over the register
 bus (no `uart_if`), reusing `core`'s own reference vectors to confirm a job
 loaded through the register map produces the same winning nonce.
+`kaspa_miner`'s testbench is the first to combine all three for real: it
+bit-bangs actual UART frames at `rx`/`tx` to load a job and reads a found
+nonce back out the wire, reusing the same reference vectors.
 
 ```
 make runtest    # generate vectors (if applicable), compile, simulate
 make wave       # open waveform in GTKWave
 ```
 
-Run from any module directory under `hw/` (e.g. `hw/core/`, `hw/work_controller/`, `hw/io/uart/`).
+Run from any module directory under `hw/` (e.g. `hw/core/`, `hw/work_controller/`, `hw/io/uart/`, `hw/miner/kaspa_miner/`).
 
 ---
 
@@ -205,7 +216,7 @@ Progress and planned work — updated as phases complete.
 - [x] `work_controller` — register map (work in, found FIFO out), transport-agnostic
 - [x] `uart_if` — UART transport adapter (framed register-bus bridge), verified without a real PHY
 - [x] Register-bus testbench (verify `work_controller` without a PHY, against a real `core`)
-- [ ] Wire `uart_if` + `work_controller` + `core` into a single `kaspa_miner` top level
+- [x] Wire `uart_if` + `work_controller` + `core` into a single `kaspa_miner` top level
 - [ ] PCIe adapter drop-in (hard block + AXI-Lite register map)
 - [ ] Host driver / software interface
 - [ ] End-to-end hashing from PC (single core)
