@@ -7,7 +7,7 @@ Vivado non-project batch mode. No board needed — just Vivado + a part.
 
 Set your exact part (package + speed grade) in `common_synth.tcl`:
 ```tcl
-if {![info exists PART]}     { set PART   xc7k70tfbg676-1 }
+if {![info exists PART]}     { set PART   xc7k325tfbg676-2 }
 ```
 
 ## Running
@@ -20,8 +20,9 @@ cmd.exe /c 'G:\...\vivado.bat -mode batch -source keccak_f1600.tcl'
 (`cmd.exe /c` is needed on WSL since a `.bat` isn't directly executable —
 skip it on native Windows and call `vivado.bat` directly.)
 
-`cshake256_core.tcl`, `matmul_pipelined_unit.tcl`, and `core.tcl` take
-params + clock via `-tclargs` (see each script's header comment for order):
+`cshake256_core.tcl`, `matmul_pipelined_unit.tcl`, `core.tcl`, and
+`kaspa_miner.tcl` take params + clock via `-tclargs` (see each script's
+header comment for order):
 ```sh
 cmd.exe /c 'G:\...\vivado.bat -mode batch -source core.tcl -tclargs 4.0 24 16'
 ```
@@ -46,10 +47,10 @@ cmd.exe /c 'G:\...\vivado.bat -mode batch -source core.tcl -tclargs 4.0 24 16'
 | `cshake256_core.tcl`           | `cshake256_pipelined_core`  | `CLK_NS STAGES S_VALUE DATA_80BYTE FOLDED` |
 | `xoshiro256pp.tcl`             | `xoshiro256pp`              | none (combinational) |
 | `matrix_generator.tcl`         | `matrix_generator`          | none |
+| `matrix_rankcheck.tcl`         | `matrix_rankcheck`          | none (fixed `CLK_NS=5.0`, no `-tclargs`) |
 | `matmul_pipelined_unit.tcl`    | `matmul_pipelined_unit`     | `CLK_NS NUM_STAGES INTERNAL_MATRIX` |
 | `core.tcl`                     | `core`                      | `CLK_NS CSHAKE_STAGES MATMUL_STAGES CSHAKE_FOLDED` |
-
-Not covered: `hw/miner/` (still a placeholder).
+| `kaspa_miner.tcl`              | `kaspa_miner`               | `CLK_NS CSHAKE_STAGES MATMUL_STAGES CSHAKE_FOLDED CLK_FREQ_HZ BAUD_RATE` |
 
 Clock defaults to 5.0 ns everywhere; pass a different value as the first
 `-tclargs` arg to probe another target or bisect toward real Fmax.

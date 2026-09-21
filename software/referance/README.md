@@ -4,12 +4,13 @@ Python reference implementation of the [kHeavyHash](https://github.com/nicehash/
 
 ## Files
 
-| File                           | Description                           |
-| ------------------------------ | ------------------------------------- |
-| `kheavyhash_ref.py`            | Core implementation                   |
-| `tests/test_kheavyhash.py`     | Unit and benchmark tests              |
-| `tests/kheavyhash_port.py`     | CLI tool for manual hash verification |
-| `tests/ref_kheavyhash_port.go` | Go reference for cross-checking       |
+| File                             | Description                           |
+| -------------------------------- | -------------------------------------- |
+| `kheavyhash_ref.py`               | Core implementation                   |
+| `tests/test_kheavyhash.py`        | Unit and benchmark tests              |
+| `tests/kheavyhash_port.py`        | CLI tool for manual hash verification |
+| `tests/ref_kheavyhash_port.go`    | Go reference for cross-checking       |
+| `tests/check_target_order.py`     | Confirms the target-compare byte order (little vs big-endian) against a real Kaspa block |
 
 ## Algorithm Overview
 

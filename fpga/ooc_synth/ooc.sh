@@ -57,6 +57,7 @@ ooc() {
         [cshake]=cshake256_core
         [matmul]=matmul_pipelined_unit
         [core]=core
+        [miner]=kaspa_miner
     )
 
     local name="$1"; shift
@@ -72,6 +73,7 @@ Usage: ooc <ip> [params...]
   cshake  [CLK_NS STAGES S_VALUE DATA_80BYTE FOLDED]   default: 5.0 24 0 1 0 (unfolded, 24 stages)
   matmul  [CLK_NS NUM_STAGES INTERNAL_MATRIX]        default: 5.0 8 1
   core    [CLK_NS CSHAKE_STAGES MATMUL_STAGES CSHAKE_FOLDED]  default: 5.0 24 8 0 (unfolded)
+  miner   [CLK_NS CSHAKE_STAGES MATMUL_STAGES CSHAKE_FOLDED CLK_FREQ_HZ BAUD_RATE]  default: 5.0 24 8 0 200000000 3000000
 
 Env:
   VIVADO_BIN / VIVADO_BAT   required - see the comment block above this function
@@ -83,6 +85,7 @@ Examples:
   ooc matmul 5.0 8 0
   OOC_THREADS=8 ooc core 4.0 24 16
   ooc core 5.0 4 8 1
+  ooc miner 5.0 4 8 1
 EOF
         return 0
     fi

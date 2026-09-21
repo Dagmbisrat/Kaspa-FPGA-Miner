@@ -1,5 +1,5 @@
 MODULE  = matrix_generator
-CACHE    = ../../core/rtl/matrix_cache.sv
+CACHE    = ../../rtl/matrix_cache.sv
 PRNG     = ../../utils/xoshiro256pp/rtl/xoshiro256pp.sv
 SRC      = rtl/$(MODULE).sv rtl/matrix_rankcheck.sv $(CACHE) $(PRNG)
 RANK_SRC = rtl/matrix_rankcheck.sv $(CACHE)
@@ -47,7 +47,7 @@ $(OBJDIR)/V$(TOP): $(SRC) $(TB)
 
 runtest: $(VECTORS) $(OBJDIR)/V$(TOP)
 	$(OBJDIR)/V$(TOP)
-	@python3 ../../tools/fpga_estimate.py matrix_generator
+	@python3 ../../../tools/fpga_estimate.py matrix_generator
 
 $(OBJDIR_RANK)/V$(TOP_RANK): $(RANK_SRC) $(TB_RANK)
 	verilator --binary --timing --trace -j $(JOBS) -Wno-fatal \

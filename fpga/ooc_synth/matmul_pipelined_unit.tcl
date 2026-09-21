@@ -22,7 +22,7 @@ set NUM_STAGES      [expr {[llength $argv] >= 2 ? [lindex $argv 1] : 8}]
 set INTERNAL_MATRIX [expr {[llength $argv] >= 3 ? [lindex $argv 2] : 1}]
 
 set TOP       matmul_pipelined_unit
-set SRC_FILES [list "$REPO_ROOT/hw/matrix/matmul_unit/rtl/matmul_pipelined_unit.sv"]
+set SRC_FILES [list "$REPO_ROOT/hw/core/matrix/matmul_unit/rtl/matmul_pipelined_unit.sv"]
 set GENERICS  [list "NUM_STAGES=$NUM_STAGES" "INTERNAL_MATRIX=$INTERNAL_MATRIX"]
 
 source "$SCRIPT_DIR/common_synth.tcl"

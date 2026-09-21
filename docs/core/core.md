@@ -252,4 +252,5 @@ combinations.
 ## References
 
 - **Companion docs** — [cSHAKE256 Core](../crypto/cshake256_core.md) | [matmul_pipelined_unit](../matrix/matmul_pipelined_unit.md) | [matrix_generator](../matrix/matrix_generator.md) | [kHeavyHash Algorithm](../KHeavyhash.md)
+- **Used by** — [`work_controller`](../work_controller.md), wired end to end in [`kaspa_miner`](../kaspa_miner.md)
 - **kHeavyHash** — https://github.com/bcutil/kheavyhash

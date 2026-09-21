@@ -7,11 +7,11 @@ OBJDIR_TP = /tmp/core_tp_build
 VECTORS   = sim/expected_vectors.mem
 
 # Dependency paths (relative to this Makefile)
-KECCAK   = ../crypto/keccak
-CSHAKE   = ../crypto/cshake256
-XOSHIRO  = ../utils/xoshiro256pp
-MATGEN   = ../matrix/matrix_generator
-MATMUL   = ../matrix/matmul_unit
+KECCAK   = crypto/keccak
+CSHAKE   = crypto/cshake256
+XOSHIRO  = utils/xoshiro256pp
+MATGEN   = matrix/matrix_generator
+MATMUL   = matrix/matmul_unit
 
 CLK_MHZ       ?= 500
 JOBS          ?= 4

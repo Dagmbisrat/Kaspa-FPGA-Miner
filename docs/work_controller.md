@@ -166,3 +166,4 @@ testbench already checks.
 
 - [`uart_if.md`](io/uart_if.md) — the UART transport adapter this register bus is exposed through
 - [`core.md`](core/core.md) — the `core` IP being controlled
+- [`kaspa_miner.md`](kaspa_miner.md) — where this is wired to `uart_if` and `core` end to end

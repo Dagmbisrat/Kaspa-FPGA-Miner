@@ -8,7 +8,7 @@ set SCRIPT_DIR [file dirname [file normalize [info script]]]
 set REPO_ROOT  [file normalize "$SCRIPT_DIR/../.."]
 
 set TOP       xoshiro256pp
-set SRC_FILES [list "$REPO_ROOT/hw/utils/xoshiro256pp/rtl/xoshiro256pp.sv"]
+set SRC_FILES [list "$REPO_ROOT/hw/core/utils/xoshiro256pp/rtl/xoshiro256pp.sv"]
 set HAS_CLK   0
 
 source "$SCRIPT_DIR/common_synth.tcl"
