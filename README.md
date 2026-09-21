@@ -2,7 +2,7 @@
 
 An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algorithm**, built so it can actually be flashed and run on the Xilinx Kintex-7 FPGAs people have — from small development boards up to the **XC7K325T** for those chasing maximum throughput.
 
-> ⚠️ **Status:** Work in progress — streaming core (folded and unfolded modes) with difficulty compare verified in simulation against the Python reference; next up are synthesis/timing, the host interface, and multi-core scaling.
+> ⚠️ **Status:** Work in progress — streaming core (folded and unfolded modes) with difficulty compare verified in simulation, plus a `work_controller` register map and `uart_if` UART transport adapter, each verified in isolation; next up is wiring all three into a single flashable `kaspa_miner` top level, then synthesis/timing and multi-core scaling.
 
 ---
 
@@ -90,17 +90,34 @@ Total_Throughput = Fmax × Core_Count
 
 Target range on XC7K70T: **~1–2 GH/s** (resource-constrained). Scaling to **2–4 GH/s** on XC7K325T once validated.
 
-### Host Interface (Planned)
+### Host Interface
 
-Primary target is a **PCIe accelerator** architecture:
+`work_controller` is the transport-agnostic register-map "brain" between a
+transport adapter and `core`: it stages a job (pre-pow hash, timestamp,
+target, nonce base) one register write at a time, fires `core.start` once
+the last word lands, and collects winning nonces into a small FIFO the host
+polls. It only speaks a plain `addr/wdata/rdata/we/re` register bus, so
+swapping transports means zero changes here. See
+[work_controller.md](docs/work_controller.md).
+
+`uart_if` is the first transport adapter — a fixed 8-byte framed protocol
+(SOF/CMD/ADDR/DATA×4/CHK) over 3-wire UART, moving one 32-bit register per
+frame. Simple and fully Verilator-simulatable without a real PHY, so it's
+the bring-up path before PCIe. See [uart_if.md](docs/io/uart_if.md).
 
 ```
-PCIe → AXI Bridge → Work Distributor → [kHeavyHash Core × N] → Result FIFO → PCIe Return
+Host (PC) ── UART ──► uart_if ── reg bus ──► work_controller ──► core × N ──► Result FIFO
+```
+
+A **PCIe accelerator** is the intended production interface, added later as
+a second register-bus adapter (hard block + AXI-Lite) with no changes to
+`work_controller` or `core`:
+
+```
+PCIe → AXI Bridge → work_controller → [kHeavyHash Core × N] → Result FIFO → PCIe Return
 ```
 
 Goals: memory-mapped control registers, nonce base + range configuration, interrupt or polling-based result reporting, minimal host overhead.
-
-An Ethernet-based interface may be used for early development testing if needed, but PCIe is the intended production interface.
 
 ---
 
@@ -112,14 +129,23 @@ hw/
 │   ├── rtl/            #   core.sv, matrix_cache.sv
 │   ├── tb/             #   core_tb.sv
 │   └── sim/            #   gen_vectors.py, expected_vectors.mem
+├── work_controller/    # Transport-agnostic register map ("brain" between host and core)
+│   ├── rtl/            #   work_controller.sv
+│   └── tb/             #   work_controller_tb.sv (drives the register bus directly)
+├── io/
+│   └── uart/           # UART transport adapter (framed register-bus bridge)
+│       ├── rtl/        #   uart_if.sv
+│       └── tb/         #   uart_if_tb.sv (bit-bang UART host model, no PHY)
 ├── crypto/
 │   ├── cshake256/      # cSHAKE256 engine (parametric STAGES, optional FOLDED)
 │   └── keccak/         # Keccak-f[1600] permutation (24-round, single-cycle)
 ├── matrix/
 │   ├── matrix_generator/ # xoshiro256++ PRNG + GF(2) rank check
 │   └── matmul_unit/    # 64×64 matrix-vector multiply (parametric STAGES, must divide 64)
-└── utils/
-    └── xoshiro256pp/   # Combinational xoshiro256++ PRNG
+├── utils/
+│   └── xoshiro256pp/   # Combinational xoshiro256++ PRNG
+└── tools/
+    └── fpga_estimate.py # Analytical flip-flop usage estimate per IP
 
 software/
 └── referance/          # Python reference implementation (kheavyhash_ref.py)
@@ -131,14 +157,22 @@ docs/                   # Design documentation per module
 
 ## Verification
 
-Every module has a Verilator testbench driven by a Python reference model. Test vectors are generated from `kheavyhash_ref.py` and compared against RTL output.
+Every module has a Verilator testbench. The hashing pipeline (`core` and
+below) is driven by a Python reference model — test vectors are generated
+from `kheavyhash_ref.py` and compared against RTL output. `work_controller`
+and `uart_if` aren't part of that hash math, so they're verified against
+stand-ins instead: `uart_if` drives a bare register-bus memory with a
+behavioral bit-bang UART host model (no real PHY needed), and
+`work_controller` drives a real `core` instance directly over the register
+bus (no `uart_if`), reusing `core`'s own reference vectors to confirm a job
+loaded through the register map produces the same winning nonce.
 
 ```
-make runtest    # generate vectors, compile, simulate
+make runtest    # generate vectors (if applicable), compile, simulate
 make wave       # open waveform in GTKWave
 ```
 
-Run from any module directory under `hw/` (e.g. `hw/core/`, `hw/crypto/cshake256/`).
+Run from any module directory under `hw/` (e.g. `hw/core/`, `hw/work_controller/`, `hw/io/uart/`).
 
 ---
 
@@ -146,7 +180,7 @@ Run from any module directory under `hw/` (e.g. `hw/core/`, `hw/crypto/cshake256
 
 Progress and planned work — updated as phases complete.
 
-### Phase 1 — Single Core *(current)*
+### Phase 1 — Single Core
 - [x] Keccak-f[1600] RTL + verification
 - [x] cSHAKE256 core + verification
 - [x] xoshiro256++ PRNG
@@ -163,10 +197,11 @@ Progress and planned work — updated as phases complete.
 - [ ] Confirm fit within XC7K70T resources
 - [ ] Achieve ≥180 MHz timing on XC7K70T
 
-### Phase 2 — Host Interface
-- [ ] `work_controller` — register map (work in, found FIFO out), transport-agnostic
-- [ ] Swappable transport adapters (build-time `TRANSPORT`) — UART bring-up first
-- [ ] Register-bus testbench (verify the controller without a PHY)
+### Phase 2 — Host Interface *(current)*
+- [x] `work_controller` — register map (work in, found FIFO out), transport-agnostic
+- [x] `uart_if` — UART transport adapter (framed register-bus bridge), verified without a real PHY
+- [x] Register-bus testbench (verify `work_controller` without a PHY, against a real `core`)
+- [ ] Wire `uart_if` + `work_controller` + `core` into a single `kaspa_miner` top level
 - [ ] PCIe adapter drop-in (hard block + AXI-Lite register map)
 - [ ] Host driver / software interface
 - [ ] End-to-end hashing from PC (single core)
