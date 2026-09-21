@@ -10,10 +10,11 @@ Phase 2 is the host interface, with UART as the first transport adapter
 the **UART wire protocol** — how bytes on TX/RX map onto reads/writes of
 `work_controller`'s register map.
 
-Implemented in [`hw/miner/rtl/io/uart/rtl/uart_if.sv`](../../../hw/miner/rtl/io/uart/rtl/uart_if.sv),
-verified against a stand-in register bus by
-[`tb/uart_if_tb.sv`](../../../hw/miner/rtl/io/uart/tb/uart_if_tb.sv)
-(`work_controller` itself doesn't exist yet).
+Implemented in [`hw/io/uart/rtl/uart_if.sv`](../../hw/io/uart/rtl/uart_if.sv),
+verified by [`tb/uart_if_tb.sv`](../../hw/io/uart/tb/uart_if_tb.sv) against
+a stand-in register-bus memory, not a real
+[`work_controller`](../work_controller.md) — the two haven't been wired
+together and tested end to end yet.
 
 `uart_if` only knows bytes-in/bytes-out and the register bus. It has no idea
 what `CTRL` or `TARGET` mean — that's `work_controller`'s job.
@@ -182,13 +183,12 @@ link (no need for a TX FIFO at this stage).
 UART/PCIe PHYs aren't Verilator-simulatable, so `tb/uart_if_tb.sv` drives
 this without any real PHY: a behavioral bit-bang UART model plays the host,
 driving `uart_if`'s `rx` pin and sampling its `tx` pin at the configured
-baud. `work_controller` doesn't exist yet, so it's checked against a
-stand-in register-bus memory instead. Covers a write + readback, a
-bad-checksum request (expect NACK), and a stray non-SOF byte before a
-valid frame (expect `WAIT_SOF` to resync).
+baud, against a stand-in register-bus memory (not a real `work_controller`).
+Covers a write + readback, a bad-checksum request (expect NACK), and a
+stray non-SOF byte before a valid frame (expect `WAIT_SOF` to resync).
 
 ---
 
 ## References
 
-- [`core.md`](../../core/core.md) — the `core` IP this interface feeds
+- [`core.md`](../core/core.md) — the `core` IP this interface feeds
