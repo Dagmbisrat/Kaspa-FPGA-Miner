@@ -9,7 +9,7 @@
 #   SRC_FILES  - Tcl list of absolute .sv source file paths
 #
 # Optional variables (defaults shown):
-#   PART       xc7k70tfbg676-1   ; # EDIT to match the exact package/speed
+#   PART       xc7k325tfbg676-2  ; # EDIT to match the exact package/speed
 #                                 ; # grade of your board before trusting
 #                                 ; # timing numbers.
 #   CLK_NS     5.0               ; # clock period constraint, in ns
@@ -40,7 +40,7 @@ if {![info exists TOP]} {
 if {![info exists SRC_FILES]} {
     error "common_synth.tcl: SRC_FILES must be set before sourcing"
 }
-if {![info exists PART]}     { set PART   xc7k70tfbg676-1 }
+if {![info exists PART]}     { set PART   xc7k325tfbg676-2 }
 if {![info exists CLK_NS]}   { set CLK_NS 5.0 }
 if {![info exists CLK_PORT]} { set CLK_PORT clk }
 if {![info exists HAS_CLK]}  { set HAS_CLK 1 }

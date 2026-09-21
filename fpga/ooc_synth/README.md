@@ -7,7 +7,7 @@ Vivado non-project batch mode. No board needed — just Vivado + a part.
 
 Set your exact part (package + speed grade) in `common_synth.tcl`:
 ```tcl
-if {![info exists PART]}     { set PART   xc7k70tfbg676-1 }
+if {![info exists PART]}     { set PART   xc7k325tfbg676-2 }
 ```
 
 ## Running
