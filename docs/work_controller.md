@@ -99,7 +99,7 @@ one word at a time and only "commit" it with the final `CTRL` write:
 ```
 
 `core` handles the rest itself: a repeated `pre_pow_hash` skips straight to
-streaming with the cached matrix (per [`core.md`](../core/core.md)); a new
+streaming with the cached matrix (per [`core.md`](core/core.md)); a new
 one triggers its own regeneration. `work_controller` doesn't need to know
 which case it is.
 
@@ -165,4 +165,4 @@ testbench already checks.
 ## References
 
 - [`uart_if.md`](io/uart_if.md) — the UART transport adapter this register bus is exposed through
-- [`core.md`](../core/core.md) — the `core` IP being controlled
+- [`core.md`](core/core.md) — the `core` IP being controlled

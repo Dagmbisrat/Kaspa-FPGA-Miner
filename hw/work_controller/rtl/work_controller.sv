@@ -1,6 +1,6 @@
 // work_controller -- transport-agnostic register-bus slave between a
 // transport adapter (uart_if today) and one core. Implements the map in
-// docs/miner/work_controller.md: stores job fields, pulses core.start once
+// docs/work_controller.md: stores job fields, pulses core.start once
 // loaded, and collects core's winning nonces into a small FIFO the host
 // polls. Knows nothing about UART -- only the plain addr/wdata/rdata/we/re
 // bus, so a different adapter (pcie_if/axi_if) needs no changes here.

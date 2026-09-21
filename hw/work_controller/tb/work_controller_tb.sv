@@ -3,7 +3,7 @@
 // addr/wdata/we/re directly against work_controller wired to a REAL core
 // (unlike uart_if_tb's stand-in memory -- work_controller is the thing
 // actually sitting in front of the hashing logic, so it's tested against
-// the real thing). See docs/miner/work_controller.md, section 8.
+// the real thing). See docs/work_controller.md, section 8.
 //
 // Test 1 reuses hw/core/sim/expected_vectors.mem (phase 0 only) to check
 // that loading a job through 18 word-writes + one CTRL write produces the

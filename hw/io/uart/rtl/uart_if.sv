@@ -1,5 +1,5 @@
 // UART transport adapter -- implements the wire protocol in
-// docs/miner/io/uart_if.md: fixed 8-byte frames (SOF, CMD, ADDR, D0..D3, CHK)
+// docs/io/uart_if.md: fixed 8-byte frames (SOF, CMD, ADDR, D0..D3, CHK)
 // in both directions, one 32-bit register access per frame.
 //
 //   byte:  0     1     2     3   4   5   6     7
