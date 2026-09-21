@@ -4,13 +4,15 @@
 #   vivado -mode batch -source kaspa_miner.tcl -tclargs <CLK_NS> <CSHAKE_STAGES> <MATMUL_STAGES> <CSHAKE_FOLDED> <CLK_FREQ_HZ> <BAUD_RATE>
 #
 # CLK_NS is the synthesis clock constraint; CLK_FREQ_HZ is uart_if's own
-# baud-divider parameter. They're independent knobs, but should agree for a
-# meaningful run (CLK_FREQ_HZ = 1e9 / CLK_NS) - the defaults already do
-# (200MHz / 5.0ns).
+# baud-divider parameter. CLK_FREQ_HZ defaults to 1e9/CLK_NS (so they agree
+# automatically) unless you pass it explicitly as the 5th arg - useful when
+# bisecting CLK_NS tighter to find real Fmax while keeping CLK_FREQ_HZ fixed
+# at whatever you'll actually deploy at (CLK_FREQ_HZ only affects the UART
+# divider math, not the timing-critical path, so decoupling it is safe).
 #
 # Examples:
 #   vivado -mode batch -source kaspa_miner.tcl                     ; # CLK_NS=5.0 (200MHz), unfolded, 3Mbaud
-#   vivado -mode batch -source kaspa_miner.tcl -tclargs 4.0         ; # tighten the clock to 250MHz (update CLK_FREQ_HZ too if it should match)
+#   vivado -mode batch -source kaspa_miner.tcl -tclargs 4.0         ; # tighten to 250MHz; CLK_FREQ_HZ follows automatically
 #   vivado -mode batch -source kaspa_miner.tcl -tclargs 5.0 4 8 1   ; # folded cSHAKE: 4 physical rounds/pass
 #
 # Each run appends one row to reports/summary.csv - run it a few times with
@@ -23,7 +25,7 @@ set CLK_NS        [expr {[llength $argv] >= 1 ? [lindex $argv 0] : 5.0}]
 set CSHAKE_STAGES [expr {[llength $argv] >= 2 ? [lindex $argv 1] : 24}]
 set MATMUL_STAGES [expr {[llength $argv] >= 3 ? [lindex $argv 2] : 8}]
 set CSHAKE_FOLDED [expr {[llength $argv] >= 4 ? [lindex $argv 3] : 0}]
-set CLK_FREQ_HZ   [expr {[llength $argv] >= 5 ? [lindex $argv 4] : 200000000}]
+set CLK_FREQ_HZ   [expr {[llength $argv] >= 5 ? [lindex $argv 4] : round(1000000000.0 / $CLK_NS)}]
 set BAUD_RATE     [expr {[llength $argv] >= 6 ? [lindex $argv 5] : 3000000}]
 
 set TOP       kaspa_miner
