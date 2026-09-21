@@ -30,10 +30,10 @@ import random
 import sys
 
 # ── Import reference cSHAKE implementation ───────────────────────────────────
-# Repo layout:  hw/crypto/cshake256/sim/gen_vectors.py
+# Repo layout:  hw/core/crypto/cshake256/sim/gen_vectors.py
 #               software/referance/kheavyhash_ref.py
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+    os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..'))
 sys.path.insert(0, os.path.join(_REPO_ROOT, 'software', 'referance'))
 from kheavyhash_ref import KHeavyhash  # noqa: E402
 

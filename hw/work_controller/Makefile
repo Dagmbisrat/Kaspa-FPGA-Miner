@@ -5,11 +5,11 @@ VECTORS = ../core/sim/expected_vectors.mem
 
 # Dependency paths (relative to this Makefile) -- same dependencies core.sv itself needs
 CORE     = ../core
-KECCAK   = ../crypto/keccak
-CSHAKE   = ../crypto/cshake256
-XOSHIRO  = ../utils/xoshiro256pp
-MATGEN   = ../matrix/matrix_generator
-MATMUL   = ../matrix/matmul_unit
+KECCAK   = ../core/crypto/keccak
+CSHAKE   = ../core/crypto/cshake256
+XOSHIRO  = ../core/utils/xoshiro256pp
+MATGEN   = ../core/matrix/matrix_generator
+MATMUL   = ../core/matrix/matmul_unit
 
 JOBS ?= 4
 # Defaults to a slow FOLDED config on purpose -- see work_controller_tb.sv's

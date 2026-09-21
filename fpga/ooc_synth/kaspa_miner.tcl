@@ -28,12 +28,12 @@ set BAUD_RATE     [expr {[llength $argv] >= 6 ? [lindex $argv 5] : 3000000}]
 
 set TOP       kaspa_miner
 set SRC_FILES [list \
-    "$REPO_ROOT/hw/crypto/keccak/rtl/keccak_round.sv" \
-    "$REPO_ROOT/hw/crypto/cshake256/rtl/cshake256_core.sv" \
-    "$REPO_ROOT/hw/utils/xoshiro256pp/rtl/xoshiro256pp.sv" \
-    "$REPO_ROOT/hw/matrix/matrix_generator/rtl/matrix_rankcheck.sv" \
-    "$REPO_ROOT/hw/matrix/matrix_generator/rtl/matrix_generator.sv" \
-    "$REPO_ROOT/hw/matrix/matmul_unit/rtl/matmul_pipelined_unit.sv" \
+    "$REPO_ROOT/hw/core/crypto/keccak/rtl/keccak_round.sv" \
+    "$REPO_ROOT/hw/core/crypto/cshake256/rtl/cshake256_core.sv" \
+    "$REPO_ROOT/hw/core/utils/xoshiro256pp/rtl/xoshiro256pp.sv" \
+    "$REPO_ROOT/hw/core/matrix/matrix_generator/rtl/matrix_rankcheck.sv" \
+    "$REPO_ROOT/hw/core/matrix/matrix_generator/rtl/matrix_generator.sv" \
+    "$REPO_ROOT/hw/core/matrix/matmul_unit/rtl/matmul_pipelined_unit.sv" \
     "$REPO_ROOT/hw/core/rtl/matrix_cache.sv" \
     "$REPO_ROOT/hw/core/rtl/core.sv" \
     "$REPO_ROOT/hw/work_controller/rtl/work_controller.sv" \

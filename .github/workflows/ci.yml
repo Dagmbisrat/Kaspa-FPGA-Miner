@@ -19,13 +19,13 @@ jobs:
       - uses: ./.github/actions/setup-sim-env
 
       - name: keccak
-        run: make -C hw/crypto/keccak runtest
+        run: make -C hw/core/crypto/keccak runtest
 
       - name: xoshiro256pp
-        run: make -C hw/utils/xoshiro256pp runtest
+        run: make -C hw/core/utils/xoshiro256pp runtest
 
       - name: matrix_generator
-        run: make -C hw/matrix/matrix_generator runtest
+        run: make -C hw/core/matrix/matrix_generator runtest
 
       - name: Upload waveforms on failure
         if: failure()
@@ -57,7 +57,7 @@ jobs:
       - uses: ./.github/actions/setup-sim-env
 
       - name: cshake256 (${{ matrix.name }})
-        run: make -C hw/crypto/cshake256 runtest FOLDED=${{ matrix.folded }} STAGES=${{ matrix.stages }}
+        run: make -C hw/core/crypto/cshake256 runtest FOLDED=${{ matrix.folded }} STAGES=${{ matrix.stages }}
 
       - name: Upload waveforms on failure
         if: failure()
@@ -79,10 +79,10 @@ jobs:
       - uses: ./.github/actions/setup-sim-env
 
       - name: matmul_unit runtest (NUM_STAGES=${{ matrix.num_stages }})
-        run: make -C hw/matrix/matmul_unit runtest NUM_STAGES=${{ matrix.num_stages }}
+        run: make -C hw/core/matrix/matmul_unit runtest NUM_STAGES=${{ matrix.num_stages }}
 
       - name: matmul_unit wiretest (NUM_STAGES=${{ matrix.num_stages }})
-        run: make -C hw/matrix/matmul_unit wiretest NUM_STAGES=${{ matrix.num_stages }}
+        run: make -C hw/core/matrix/matmul_unit wiretest NUM_STAGES=${{ matrix.num_stages }}
 
       - name: Upload waveforms on failure
         if: failure()

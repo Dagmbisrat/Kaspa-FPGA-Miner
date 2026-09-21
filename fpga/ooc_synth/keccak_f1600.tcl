@@ -6,8 +6,8 @@ set REPO_ROOT  [file normalize "$SCRIPT_DIR/../.."]
 
 set TOP       keccak_f1600
 set SRC_FILES [list \
-    "$REPO_ROOT/hw/crypto/keccak/rtl/keccak_f1600.sv" \
-    "$REPO_ROOT/hw/crypto/keccak/rtl/keccak_round.sv" \
+    "$REPO_ROOT/hw/core/crypto/keccak/rtl/keccak_f1600.sv" \
+    "$REPO_ROOT/hw/core/crypto/keccak/rtl/keccak_round.sv" \
 ]
 set CLK_NS    5.0
 ;# PART/PART left at common_synth.tcl default - edit there once for all modules.

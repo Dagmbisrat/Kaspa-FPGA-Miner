@@ -8,7 +8,7 @@ set REPO_ROOT  [file normalize "$SCRIPT_DIR/../.."]
 
 set TOP       matrix_rankcheck
 set SRC_FILES [list \
-    "$REPO_ROOT/hw/matrix/matrix_generator/rtl/matrix_rankcheck.sv" \
+    "$REPO_ROOT/hw/core/matrix/matrix_generator/rtl/matrix_rankcheck.sv" \
 ]
 set CLK_NS    5.0
 ;# PART/PART left at common_synth.tcl default - edit there once for all modules.

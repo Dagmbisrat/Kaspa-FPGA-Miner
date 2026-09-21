@@ -33,8 +33,8 @@ set FOLDED       [expr {[llength $argv] >= 5 ? [lindex $argv 4] : 0}]
 # NOTE: the module inside cshake256_core.sv is named cshake256_pipelined_core.
 set TOP       cshake256_pipelined_core
 set SRC_FILES [list \
-    "$REPO_ROOT/hw/crypto/keccak/rtl/keccak_round.sv" \
-    "$REPO_ROOT/hw/crypto/cshake256/rtl/cshake256_core.sv" \
+    "$REPO_ROOT/hw/core/crypto/keccak/rtl/keccak_round.sv" \
+    "$REPO_ROOT/hw/core/crypto/cshake256/rtl/cshake256_core.sv" \
 ]
 set GENERICS [list "STAGES=$STAGES" "S_VALUE=$S_VALUE" "DATA_80BYTE=$DATA_80BYTE" "FOLDED=$FOLDED"]
 

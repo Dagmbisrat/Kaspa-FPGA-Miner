@@ -128,7 +128,15 @@ hw/
 ├── core/               # Top-level kHeavyHash core (streaming pipeline + block-load FSM)
 │   ├── rtl/            #   core.sv, matrix_cache.sv
 │   ├── tb/             #   core_tb.sv
-│   └── sim/            #   gen_vectors.py, expected_vectors.mem
+│   ├── sim/            #   gen_vectors.py, expected_vectors.mem
+│   ├── crypto/         # (only core uses these, so they live under it)
+│   │   ├── cshake256/  #   cSHAKE256 engine (parametric STAGES, optional FOLDED)
+│   │   └── keccak/     #   Keccak-f[1600] permutation (24-round, single-cycle)
+│   ├── matrix/
+│   │   ├── matrix_generator/ # xoshiro256++ PRNG + GF(2) rank check
+│   │   └── matmul_unit/      # 64×64 matrix-vector multiply (parametric STAGES, must divide 64)
+│   └── utils/
+│       └── xoshiro256pp/     # Combinational xoshiro256++ PRNG
 ├── work_controller/    # Transport-agnostic register map ("brain" between host and core)
 │   ├── rtl/            #   work_controller.sv
 │   └── tb/             #   work_controller_tb.sv (drives the register bus directly)
@@ -136,14 +144,10 @@ hw/
 │   └── uart/           # UART transport adapter (framed register-bus bridge)
 │       ├── rtl/        #   uart_if.sv
 │       └── tb/         #   uart_if_tb.sv (bit-bang UART host model, no PHY)
-├── crypto/
-│   ├── cshake256/      # cSHAKE256 engine (parametric STAGES, optional FOLDED)
-│   └── keccak/         # Keccak-f[1600] permutation (24-round, single-cycle)
-├── matrix/
-│   ├── matrix_generator/ # xoshiro256++ PRNG + GF(2) rank check
-│   └── matmul_unit/    # 64×64 matrix-vector multiply (parametric STAGES, must divide 64)
-├── utils/
-│   └── xoshiro256pp/   # Combinational xoshiro256++ PRNG
+├── miner/
+│   └── kaspa_miner/    # Top-level single-core miner: uart_if + work_controller + core wired together
+│       ├── rtl/        #   kaspa_miner.sv
+│       └── tb/         #   kaspa_miner_tb.sv (bit-bang UART host model, full round trip)
 └── tools/
     └── fpga_estimate.py # Analytical flip-flop usage estimate per IP
 

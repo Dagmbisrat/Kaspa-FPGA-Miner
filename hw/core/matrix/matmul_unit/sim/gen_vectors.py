@@ -20,7 +20,7 @@ import random
 
 # Import the reference implementation.
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+    os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..'))
 sys.path.insert(0, os.path.join(_REPO_ROOT, 'software', 'referance'))
 from kheavyhash_ref import KHeavyhash  # noqa: E402
 

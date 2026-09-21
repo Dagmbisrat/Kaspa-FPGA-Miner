@@ -28,12 +28,12 @@ set CSHAKE_FOLDED [expr {[llength $argv] >= 4 ? [lindex $argv 3] : 0}]
 
 set TOP       core
 set SRC_FILES [list \
-    "$REPO_ROOT/hw/crypto/keccak/rtl/keccak_round.sv" \
-    "$REPO_ROOT/hw/crypto/cshake256/rtl/cshake256_core.sv" \
-    "$REPO_ROOT/hw/utils/xoshiro256pp/rtl/xoshiro256pp.sv" \
-    "$REPO_ROOT/hw/matrix/matrix_generator/rtl/matrix_rankcheck.sv" \
-    "$REPO_ROOT/hw/matrix/matrix_generator/rtl/matrix_generator.sv" \
-    "$REPO_ROOT/hw/matrix/matmul_unit/rtl/matmul_pipelined_unit.sv" \
+    "$REPO_ROOT/hw/core/crypto/keccak/rtl/keccak_round.sv" \
+    "$REPO_ROOT/hw/core/crypto/cshake256/rtl/cshake256_core.sv" \
+    "$REPO_ROOT/hw/core/utils/xoshiro256pp/rtl/xoshiro256pp.sv" \
+    "$REPO_ROOT/hw/core/matrix/matrix_generator/rtl/matrix_rankcheck.sv" \
+    "$REPO_ROOT/hw/core/matrix/matrix_generator/rtl/matrix_generator.sv" \
+    "$REPO_ROOT/hw/core/matrix/matmul_unit/rtl/matmul_pipelined_unit.sv" \
     "$REPO_ROOT/hw/core/rtl/matrix_cache.sv" \
     "$REPO_ROOT/hw/core/rtl/core.sv" \
 ]
