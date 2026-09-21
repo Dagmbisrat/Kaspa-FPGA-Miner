@@ -4,11 +4,10 @@
 
 ## Overview
 
-`hw/core` (the hashing pipeline) is done and verified. Per the roadmap,
-Phase 2 is the host interface, with UART as the first transport adapter
-(simple, and simulatable in Verilator without a real PHY). This doc defines
-the **UART wire protocol** — how bytes on TX/RX map onto reads/writes of
-`work_controller`'s register map.
+`hw/core` (the hashing pipeline) is done and verified. UART is the first
+host transport adapter (simple, and simulatable in Verilator without a real
+PHY). This doc defines the **UART wire protocol** — how bytes on TX/RX map
+onto reads/writes of `work_controller`'s register map.
 
 Implemented in [`hw/io/uart/rtl/uart_if.sv`](../../hw/io/uart/rtl/uart_if.sv),
 verified on its own by [`tb/uart_if_tb.sv`](../../hw/io/uart/tb/uart_if_tb.sv)
