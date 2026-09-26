@@ -78,3 +78,39 @@ that, so the UART divider always matches the real clock. `uart_if` rounds
 `CLK_FREQ_HZ / (16 * BAUD_RATE)` down, so keep that ratio close to a whole
 number. 115200 at 100 MHz gives 54.25, only 0.46% off. 921600 or 1M at
 100 MHz is 5-13% off and won't work reliably.
+
+## Programming from another PC
+
+Building needs a licensed Vivado. Programming doesn't: the free **Vivado Lab
+Edition** is enough on the PC the JTAG cable is plugged into. You have two
+options.
+
+**A. Copy the files over (simplest).** Copy `build/<target>/*.bit`/`*.mcs`
+and this folder's `.tcl` files to the board PC, and run `program.tcl` there
+with Lab Edition.
+
+**B. Remote hw_server.** On the board PC, run Xilinx's `hw_server` (it comes
+with Lab Edition). It listens on TCP **3121**:
+```sh
+hw_server                                   # Linux: <install>/bin/hw_server
+C:\Xilinx\Vivado_Lab\<ver>\bin\hw_server.bat  # Windows
+```
+Allow the port through the firewall (Windows, admin shell):
+```
+netsh advfirewall firewall add rule name="Xilinx hw_server" dir=in action=allow protocol=TCP localport=3121
+```
+Then, on the Vivado PC:
+```sh
+HW_SERVER=<board-pc-ip>:3121 vivado -mode batch -source program.tcl -tclargs blinky
+```
+In the GUI, use Open Target -> Open New Target -> Remote server instead.
+
+hw_server has **no authentication**, so only expose it on a trusted LAN.
+If the Vivado PC is somewhere else (for example a university lab machine),
+don't open the port to the internet. Tunnel it over SSH from the board PC
+instead:
+```sh
+ssh -R 3121:localhost:3121 you@lab-machine   # then HW_SERVER=localhost:3121 there
+```
+Keep hw_server on the same Vivado version as the machine connecting to it.
+Mismatched versions often refuse to connect.

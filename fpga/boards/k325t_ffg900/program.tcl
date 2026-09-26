@@ -28,7 +28,13 @@ set MCS "$SCRIPT_DIR/build/$TARGET/${TOP}.mcs"
 if {![file exists $BIT]} { error "program.tcl: $BIT not found - run build.tcl -tclargs $TARGET first" }
 
 open_hw
-connect_hw_server
+# Set HW_SERVER=<host>:3121 to reach a hw_server on the PC the JTAG cable is
+# plugged into (see README.md "Programming from another PC"); default local.
+if {[info exists ::env(HW_SERVER)] && $::env(HW_SERVER) ne ""} {
+    connect_hw_server -url $::env(HW_SERVER)
+} else {
+    connect_hw_server
+}
 open_hw_target
 set dev [lindex [get_hw_devices xc7k325t*] 0]
 if {$dev eq ""} { error "program.tcl: no xc7k325t on the JTAG chain (found: [get_hw_devices])" }
