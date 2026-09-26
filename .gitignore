@@ -43,3 +43,9 @@ result.out
 # above already cover most of it; these two aren't caught by those globs
 fpga/ooc_synth/reports/
 fpga/ooc_synth/dfx_runtime.txt
+
+# Board build outputs (fpga/boards/<board>/build.tcl)
+fpga/boards/*/build/
+*.bit
+*.mcs
+*.prm
