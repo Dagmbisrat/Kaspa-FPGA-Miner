@@ -31,11 +31,18 @@ set_property -dict {PACKAGE_PIN A15 IOSTANDARD LVCMOS33} [get_ports rst_n]
 set_false_path -from [get_ports rst_n]
 
 # ---------------------------------------------------------------------------
-# User LEDs: pin -> 3.3k -> LED -> 3.3 V, so drive 0 to light (active-low)
-#   led_n[0] = V2 on A11, led_n[1] = V1 on A12
+# User LEDs: pin -> 3.3k -> LED -> 3.3 V, so drive 0 to light (active-low).
+# Designators are the schematic's; the physical board's silkscreen may
+# differ (one board seen labelled V1/V7), so blinky gives each a distinct
+# blink rate to tell them apart.
+#   led_n[0] = V2 on A11 (bank 18)   led_n[2] = V4 on V19 (bank 14)
+#   led_n[1] = V1 on A12 (bank 18)   led_n[3] = V5 on W19 (bank 14, the
+#                                              seller's test-design LED)
 # ---------------------------------------------------------------------------
 set_property -dict {PACKAGE_PIN A11 IOSTANDARD LVCMOS33} [get_ports {led_n[0]}]
 set_property -dict {PACKAGE_PIN A12 IOSTANDARD LVCMOS33} [get_ports {led_n[1]}]
+set_property -dict {PACKAGE_PIN V19 IOSTANDARD LVCMOS33} [get_ports {led_n[2]}]
+set_property -dict {PACKAGE_PIN W19 IOSTANDARD LVCMOS33} [get_ports {led_n[3]}]
 set_false_path -to [get_ports {led_n[*]}]
 
 # ---------------------------------------------------------------------------

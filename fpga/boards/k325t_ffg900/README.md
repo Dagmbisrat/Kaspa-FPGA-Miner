@@ -11,11 +11,17 @@ their test project's `PCIe.xdc`.
 |------------|----------|------------------------|-------|
 | `clk_50m`  | D12      | Y1 osc -> GCLK2        | 50 MHz, single-ended LVCMOS33 (MRCC) |
 | `rst_n`    | A15      | button K2              | 10k pull-up, **0 while pressed** |
-| `led_n[0]` | A11      | LED V2                 | active-low (pin -> 3.3k -> LED -> 3.3 V) |
-| `led_n[1]` | A12      | LED V1                 | active-low |
+| `led_n[0]` | A11      | LED V2 (schematic)     | active-low (pin -> 3.3k -> LED -> 3.3 V) |
+| `led_n[1]` | A12      | LED V1 (schematic)     | active-low |
+| `led_n[2]` | V19      | LED V4 (schematic)     | active-low |
+| `led_n[3]` | W19      | LED V5 (schematic)     | active-low, the seller's test-design LED |
 | `uart_rx`  | J29      | header J10 pin 37      | wire to adapter **TXD** |
 | `uart_tx`  | J28      | header J10 pin 38      | wire to adapter **RXD** |
 | GND        | -        | J10 pin 1/4/65/66      | wire to adapter **GND** |
+
+The LED designators are the schematic's. At least one board's silkscreen
+differs (it shows V1 and V7), so run blinky to see which physical LED is on
+which pin.
 
 Other useful facts:
 - **K1 is PROGRAM_B.** Pressing it reloads the FPGA from flash, the same as
@@ -43,15 +49,18 @@ from this folder.
    vivado -mode batch -source build.tcl   -tclargs blinky
    vivado -mode batch -source program.tcl -tclargs blinky
    ```
-   You should see V2 blinking about once a second, and V1 lit while K2 is
-   held. With the USB-serial adapter wired up, typing in a serial terminal
+   The four LED pins count in binary, so each LED blinks at its own rate:
+   A11 about 3 Hz, A12 about 1.5 Hz, V19 about 0.75 Hz, W19 about 0.37 Hz.
+   Note which physical LED blinks at which speed. Holding K2 lights them
+   all solid. With the USB-serial adapter wired up, typing in a serial terminal
    echoes back at any baud rate. Power-cycle to get the factory design back.
 3. **Miner over JTAG** (100 MHz, folded cSHAKE, 115200 baud):
    ```sh
    vivado -mode batch -source build.tcl   -tclargs miner
    vivado -mode batch -source program.tcl -tclargs miner
    ```
-   V2 blinks as a heartbeat and V1 flickers on UART traffic. The build
+   The LEDs on A11 and W19 blink as a heartbeat, and the ones on A12 and
+   V19 flicker on UART traffic. The build
    prints post-route WNS. If it's negative, rebuild with a slower clock,
    for example `-tclargs miner 12` for 83 MHz.
 4. **Make it permanent** (overwrites the factory design, so do step 1 first):

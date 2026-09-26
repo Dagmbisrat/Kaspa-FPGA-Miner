@@ -7,8 +7,10 @@
 // Everything else is kaspa_miner as-is. CLK_FREQ_HZ is derived from
 // CLK_DIV, so uart_if's baud divider always matches the real clock.
 //
-//   led_n[0] (V2) : ~1 Hz heartbeat once the MMCM locks and reset releases
-//   led_n[1] (V1) : flickers on UART traffic in either direction
+//   heartbeat     : ~1 Hz blink once the MMCM locks and reset releases
+//   UART activity : flickers on traffic in either direction
+// Each is on two LEDs (heartbeat: A11 + W19, activity: A12 + V19) until
+// blinky pins down which physical LEDs the board actually has.
 module kaspa_miner_top #(
     parameter int CLK_DIV       = 10,         // 1000 MHz VCO / 10 = 100 MHz
     parameter int CSHAKE_STAGES = 4,
@@ -19,7 +21,7 @@ module kaspa_miner_top #(
     input  logic       clk_50m,
     input  logic       rst_n,
 
-    output logic [1:0] led_n,
+    output logic [3:0] led_n,
 
     input  logic       uart_rx,
     output logic       uart_tx
@@ -112,7 +114,9 @@ module kaspa_miner_top #(
         end
     end
 
-    assign led_n[0] = ~hb_cnt[HB_BITS-1];
-    assign led_n[1] = (act_cnt == '0);
+    logic hb_on, act_on;
+    assign hb_on  = hb_cnt[HB_BITS-1];
+    assign act_on = (act_cnt != '0);
+    assign led_n  = ~{hb_on, act_on, act_on, hb_on};  // {W19, V19, A12, A11}
 
 endmodule
