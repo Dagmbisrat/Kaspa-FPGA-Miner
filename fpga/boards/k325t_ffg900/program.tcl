@@ -24,7 +24,7 @@ if {[file exists "$DIR/build_info.txt"]} {
     set fh [open "$DIR/build_info.txt"]; puts [read $fh]; close $fh
 }
 
-open_hw
+open_hw_manager
 # HW_SERVER=<host>:3121 for a remote hw_server
 if {[info exists ::env(HW_SERVER)] && $::env(HW_SERVER) ne ""} {
     connect_hw_server -url $::env(HW_SERVER)

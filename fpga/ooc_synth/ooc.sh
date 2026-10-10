@@ -2,46 +2,14 @@
 #   source ooc.sh
 # It refuses to run unless the current shell is still in this directory.
 #
-# Vivado invocation is machine-specific - set ONE of these in ~/.bashrc:
-#   VIVADO_BIN  - native vivado on this OS, e.g. a Linux box with Vivado
-#                 on PATH after sourcing settings64.sh (VIVADO_BIN=vivado),
-#                 or a full path if it's not on PATH.
-#   VIVADO_BAT  - Windows vivado.bat path, for WSL with a Windows-only
-#                 Vivado reached via cmd.exe interop, e.g.
-#                 'G:\DevLibrary\Vivado\2025.2\Vivado\bin\vivado.bat'
+# Vivado is launched through ../vivado.sh - set VIVADO_BIN or VIVADO_BAT in
+# ~/.bashrc as described there.
 #
 # OOC_THREADS - optional: parallel jobs for synth_design (default 4, set in
 #               common_synth.tcl). Export it, or set it per-run:
 #                 OOC_THREADS=8 ooc matmul 5.0 8 0
-#               Forwarded explicitly (not just inherited) because the
-#               VIVADO_BAT/cmd.exe path runs in a separate Windows environment
-#               that WSL's exported vars don't reach.
 
-_ooc_run_vivado() {
-    local script="$1"; shift
-    local threads="${OOC_THREADS:-4}"
-
-    if [[ -n "$VIVADO_BIN" ]]; then
-        if [[ $# -gt 0 ]]; then
-            OOC_THREADS="$threads" "$VIVADO_BIN" -mode batch -source "${script}.tcl" -tclargs "$@"
-        else
-            OOC_THREADS="$threads" "$VIVADO_BIN" -mode batch -source "${script}.tcl"
-        fi
-        return $?
-    fi
-
-    if [[ -n "$VIVADO_BAT" ]]; then
-        if [[ $# -gt 0 ]]; then
-            /mnt/c/Windows/System32/cmd.exe /c "set OOC_THREADS=$threads && $VIVADO_BAT -mode batch -source ${script}.tcl -tclargs $*"
-        else
-            /mnt/c/Windows/System32/cmd.exe /c "set OOC_THREADS=$threads && $VIVADO_BAT -mode batch -source ${script}.tcl"
-        fi
-        return $?
-    fi
-
-    echo "ooc: set \$VIVADO_BIN (native vivado path/command) or \$VIVADO_BAT (Windows vivado.bat path, for WSL+cmd.exe)" >&2
-    return 1
-}
+source "$(dirname "${BASH_SOURCE[0]}")/../vivado.sh"
 
 ooc() {
     case "$PWD" in
@@ -76,7 +44,7 @@ Usage: ooc <ip> [params...]
   miner   [CLK_NS CSHAKE_STAGES MATMUL_STAGES CSHAKE_FOLDED CLK_FREQ_HZ BAUD_RATE]  default: 5.0 24 8 0 200000000 3000000
 
 Env:
-  VIVADO_BIN / VIVADO_BAT   required - see the comment block above this function
+  VIVADO_BIN / VIVADO_BAT   required - see fpga/vivado.sh
   OOC_THREADS               optional - parallel synth_design jobs (default 4)
 
 Examples:
@@ -97,5 +65,5 @@ EOF
         return 1
     fi
 
-    _ooc_run_vivado "$script" "$@"
+    OOC_THREADS="${OOC_THREADS:-4}" vivado_run "${script}.tcl" "$@"
 }
