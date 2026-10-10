@@ -68,6 +68,12 @@ class ProtocolError(Exception):
 class Miner:
     def __init__(self, port, baud, quiet=False, timeout=0.5):
         self.ser = serial.Serial(port, baud, timeout=timeout)
+        # FTDI on Linux holds short replies for its 16 ms latency timer by
+        # default; low-latency mode drops it to 1 ms (no root needed).
+        try:
+            self.ser.set_low_latency_mode(True)
+        except (AttributeError, NotImplementedError, OSError, ValueError):
+            pass
         self.quiet = quiet
         # Last value written per register, for load_job(only_changed=True).
         # Stale after a board reset - call forget() then.

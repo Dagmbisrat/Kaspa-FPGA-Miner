@@ -314,8 +314,9 @@ def cmd_verify(m, args):
     m.quiet = True
 
     # Park the miner on an impossible target so finds from an earlier job
-    # (e.g. an all-ones `job`) stop arriving, then drain them.
-    m.load_job(0, 0, 0, 0)
+    # (e.g. an all-ones `job`) stop arriving, then drain them. Same pph as the
+    # real job: pph=0 seeds xoshiro with zeros and matrix generation never ends.
+    m.load_job(int.from_bytes(pph, "little"), 0, 0, 0)
     time.sleep(0.2)
     while m.pop_found():
         pass
