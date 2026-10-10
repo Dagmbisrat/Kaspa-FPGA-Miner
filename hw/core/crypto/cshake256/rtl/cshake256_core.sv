@@ -66,7 +66,8 @@ logic [RATE_BITS-1:0]  pr0;  // Stage 0: encoded message block
 logic [STATE_BITS-1:0] pr1;  // Stage 1: after XOR into sponge state
 
 // Valid shift register — one bit per pipeline stage (feed-forward, no stalls).
-logic [LAT-1:0] valid_sr;
+// max_fanout: valid_sr[1] selects all 1600 fold-mux bits; replicate so no single flop drives them all
+(* max_fanout = 64 *) logic [LAT-1:0] valid_sr;
 
 
 // Round constants

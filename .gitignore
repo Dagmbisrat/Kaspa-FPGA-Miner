@@ -22,6 +22,7 @@ obj_dir/
 
 # Personal files
 todo.txt
+TODO.md
 hw/miner/Notes.txt
 
 # Personal Scripts
@@ -43,3 +44,12 @@ result.out
 # above already cover most of it; these two aren't caught by those globs
 fpga/ooc_synth/reports/
 fpga/ooc_synth/dfx_runtime.txt
+
+# Board build outputs (fpga/boards)
+fpga/boards/*/build/
+fpga/boards/*/vmon_*.csv
+fpga/boards/*/clockInfo.txt
+fpga/boards/*/dfx_runtime.txt
+
+# Personal debug tools
+fpga/teensy/

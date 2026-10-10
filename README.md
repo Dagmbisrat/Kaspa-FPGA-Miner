@@ -4,8 +4,10 @@ An open-source FPGA implementation of the **Kaspa KHeavyHash proof-of-work algor
 
 `kaspa_miner` (streaming core, `work_controller` register map, and `uart_if`
 UART transport, all wired into a single flashable top level) is verified
-end to end in simulation and, on the XC7K325T with `CSHAKE_FOLDED=1,
-CSHAKE_STAGES=4`, fits and closes timing in Vivado.
+end to end in simulation and runs on real hardware: on an XC7K325T board
+(`CSHAKE_FOLDED=1, CSHAKE_STAGES=4, MATMUL_STAGES=32`) it closes timing at
+55.56 MHz and mines at ~6.5 MH/s, with every found nonce checked against the
+Python reference. See [fpga/boards/k325t_ffg900](fpga/boards/k325t_ffg900/README.md).
 
 ---
 
@@ -68,6 +70,9 @@ count independently of folding.
 - On **XC7K325T** with `CSHAKE_FOLDED=1, CSHAKE_STAGES=4` (Vivado synthesis):
   75.5% LUT, 23.9% FF, real Fmax **~139 MHz** (target 8.5 ns / 117.6 MHz,
   WNS +1.32 ns).
+- On the **XC7K325T board** (full place and route, `MATMUL_STAGES=32`):
+  62.5% LUT, 17.3% FF, **55.56 MHz** (WNS +0.391 ns), **~6.5 MH/s** measured
+  on hardware. Routing congestion, not logic depth, sets this clock.
 
 At full pipeline depth, throughput per core approaches:
 
@@ -130,6 +135,12 @@ hw/
 │       └── tb/         #   kaspa_miner_tb.sv (bit-bang UART host model, full round trip)
 └── tools/
     └── fpga_estimate.py # Analytical flip-flop usage estimate per IP
+
+fpga/
+├── vivado.sh           # Shared Vivado launcher (native or WSL -> Windows Vivado)
+├── ooc_synth/          # Out-of-context synthesis per IP (ooc.sh)
+└── boards/
+    └── k325t_ffg900/   # XC7K325T board: build/program scripts, tops, XDC, uart CLI
 
 software/
 └── referance/          # Python reference implementation (kheavyhash_ref.py)

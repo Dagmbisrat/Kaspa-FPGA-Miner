@@ -1,0 +1,558 @@
+#!/usr/bin/env python3
+"""uart: talk to the miner or uart_test_top over UART.
+
+Setup: pip install pyserial.  Port: --port COM5 or UART_PORT=COM5.
+
+Commands:
+  ports                          list serial ports
+  regs                           show the register map
+  read  <REG|0xNN>               read one register        e.g. read STATUS
+  write <REG|0xNN> <value>       write one register       e.g. write NONCE0 0x1000
+  status                         STATUS + FOUND_COUNT, decoded
+  dump                           read every register
+  job [--pph H] [--ts N] [--target H] [--nonce N] [--no-start]
+                                 load a job (all 20 words) then write CTRL=1
+  found [--all] [--wait SEC]     pop found nonce(s) from the FIFO
+  badchk [REG]                   send a frame with a bad checksum (expect NACK)
+  raw <byte> <byte> ...          send raw hex bytes, print whatever comes back
+  listen                         print incoming text until Ctrl-C
+  diag                           temperature, voltages, uptime, counters (debug bitstream)
+  monitor [--interval SEC]       live diag log, one line per interval, Ctrl-C to stop
+  selftest                       full check - uart_test bitstream only (fake finds)
+  verify [--bits N] [--count N] [--timeout SEC] [--nonce N]
+                                 real miner: mine a real job, check every found
+                                 nonce against the Python reference (needs
+                                 pycryptodome and this folder in a repo checkout)
+
+Frame: AA CMD ADDR D0 D1 D2 D3 CHK (little-endian, CHK = XOR(CMD..D3)).
+"""
+import argparse
+import os
+import random
+import struct
+import sys
+import time
+
+try:
+    import serial
+    import serial.tools.list_ports
+except ImportError:
+    sys.exit("pyserial is missing - run: pip install pyserial")
+
+SOF = 0xAA
+CMD_READ, CMD_WRITE = 0x00, 0x01
+RESP_READ, RESP_WRITE_ACK, RESP_NACK = 0x80, 0x81, 0x82
+CMD_NAMES = {CMD_READ: "READ", CMD_WRITE: "WRITE", RESP_READ: "READ-RESP",
+             RESP_WRITE_ACK: "WRITE-ACK", RESP_NACK: "NACK"}
+
+# work_controller register map (docs/work_controller.md)
+REGS = {"CTRL": 0x00, "STATUS": 0x04}
+REGS.update({f"PPH{i}": 0x08 + 4 * i for i in range(8)})
+REGS.update({"TS0": 0x28, "TS1": 0x2C})
+REGS.update({f"TGT{i}": 0x30 + 4 * i for i in range(8)})
+REGS.update({"NONCE0": 0x50, "NONCE1": 0x54,
+             "FOUND_NONCE0": 0x58, "FOUND_NONCE1": 0x5C,
+             "FOUND_WORKID": 0x60, "FOUND_COUNT": 0x64})
+# Diag regs (uart_test_top only)
+DIAG_REGS = {"DIAG_ID": 0x80, "UPTIME": 0x84, "TEMP": 0x88, "TEMP_MAX": 0x8C,
+             "TEMP_MIN": 0x90, "VCCINT": 0x94, "VCCAUX": 0x9C, "VCCBRAM": 0xA0,
+             "JOBS": 0xA4, "FINDS": 0xA8, "REQUESTS": 0xAC, "CLK_FREQ": 0xB0,
+             "CYCLES": 0xB4}
+DIAG_ID = 0x44494147  # "DIAG"
+MINER_REGS = dict(REGS)
+REGS.update(DIAG_REGS)
+ADDR_NAMES = {a: n for n, a in REGS.items()}
+REG_NOTES = {"CTRL": "W  bit0=START", "STATUS": "R  bit1=found pending",
+             "FOUND_NONCE0": "R  low word, POPS the FIFO",
+             "FOUND_NONCE1": "R  high word of last pop",
+             "FOUND_WORKID": "R  work id of last pop",
+             "FOUND_COUNT": "R  finds waiting"}
+for _n in DIAG_REGS:
+    REG_NOTES[_n] = "R  diag (debug bitstream only)"
+# Skipped by dump (write-only / pops FIFO)
+DUMP_SKIP = {"CTRL", "FOUND_NONCE0"}
+
+MASK32 = 0xFFFFFFFF
+
+
+def checksum(body):
+    chk = 0
+    for b in body:
+        chk ^= b
+    return chk
+
+
+def build_frame(cmd, addr, data=0, corrupt=False):
+    body = bytes([cmd, addr]) + struct.pack("<I", data & MASK32)
+    return bytes([SOF]) + body + bytes([checksum(body) ^ (0xFF if corrupt else 0)])
+
+
+def reg_name(addr):
+    return ADDR_NAMES.get(addr, f"0x{addr:02X}")
+
+
+def parse_reg(text):
+    key = text.upper()
+    if key in REGS:
+        return REGS[key]
+    try:
+        addr = int(text, 0)
+    except ValueError:
+        sys.exit(f"unknown register '{text}' - see: uart regs")
+    if not 0 <= addr <= 0xFF:
+        sys.exit(f"address {text} out of range (0x00-0xFF)")
+    return addr
+
+
+def parse_int(text):
+    try:
+        return int(text, 0)
+    except ValueError:
+        sys.exit(f"not a number: '{text}' (use decimal or 0x hex)")
+
+
+class ProtocolError(Exception):
+    pass
+
+
+class Miner:
+    def __init__(self, port, baud, quiet=False, timeout=0.5):
+        self.ser = serial.Serial(port, baud, timeout=timeout)
+        self.quiet = quiet
+        time.sleep(0.05)
+        self.ser.reset_input_buffer()
+
+    def log(self, text):
+        if not self.quiet:
+            print(text)
+
+    def transact(self, cmd, addr, data=0, corrupt=False):
+        tx = build_frame(cmd, addr, data, corrupt)
+        note = f"{CMD_NAMES.get(cmd, hex(cmd))} {reg_name(addr)}"
+        if cmd == CMD_WRITE:
+            note += f" = 0x{data & MASK32:08X}"
+        if corrupt:
+            note += "  (checksum deliberately wrong)"
+        self.log(f">> {tx.hex(' ')}   {note}")
+        self.ser.write(tx)
+
+        rx = self.ser.read(8)
+        if len(rx) != 8:
+            self.log(f"<< {rx.hex(' ') or '(nothing)'}")
+            raise ProtocolError(f"timeout: got {len(rx)}/8 response bytes")
+        (rdata,) = struct.unpack("<I", rx[3:7])
+        rcmd, raddr = rx[1], rx[2]
+        self.log(f"<< {rx.hex(' ')}   {CMD_NAMES.get(rcmd, hex(rcmd))} "
+                 f"{reg_name(raddr)} = 0x{rdata:08X}")
+        if rx[0] != SOF:
+            raise ProtocolError("response doesn't start with 0xAA")
+        if checksum(rx[1:7]) != rx[7]:
+            raise ProtocolError("response checksum is wrong")
+        if raddr != addr:
+            raise ProtocolError(f"response is for 0x{raddr:02X}, asked 0x{addr:02X}")
+        return rcmd, rdata
+
+    def read(self, addr):
+        rcmd, data = self.transact(CMD_READ, addr)
+        if rcmd != RESP_READ:
+            raise ProtocolError(f"expected READ-RESP, got {CMD_NAMES.get(rcmd, hex(rcmd))}")
+        return data
+
+    def write(self, addr, data):
+        rcmd, echo = self.transact(CMD_WRITE, addr, data)
+        if rcmd != RESP_WRITE_ACK:
+            raise ProtocolError(f"expected WRITE-ACK, got {CMD_NAMES.get(rcmd, hex(rcmd))}")
+        if echo != data & MASK32:
+            raise ProtocolError(f"ack echoed 0x{echo:08X}, wrote 0x{data & MASK32:08X}")
+
+    def write_wide(self, first, value, words):
+        for i in range(words):
+            self.write(first + 4 * i, (value >> (32 * i)) & MASK32)
+
+    def read_wide(self, first, words):
+        return sum(self.read(first + 4 * i) << (32 * i) for i in range(words))
+
+    def load_job(self, pph, ts, target, nonce, start=True):
+        self.write_wide(REGS["PPH0"], pph, 8)
+        self.write_wide(REGS["TS0"], ts, 2)
+        self.write_wide(REGS["TGT0"], target, 8)
+        self.write_wide(REGS["NONCE0"], nonce, 2)
+        if start:
+            self.write(REGS["CTRL"], 1)
+
+    def pop_found(self):
+        """Pop one entry: (nonce, work_id), or None if the FIFO is empty."""
+        if self.read(REGS["FOUND_COUNT"]) == 0:
+            return None
+        lo = self.read(REGS["FOUND_NONCE0"])
+        hi = self.read(REGS["FOUND_NONCE1"])
+        wid = self.read(REGS["FOUND_WORKID"])
+        return (hi << 32) | lo, wid
+
+    def wait_found(self, count, timeout):
+        deadline = time.monotonic() + timeout
+        n = 0
+        while time.monotonic() < deadline:
+            n = self.read(REGS["FOUND_COUNT"])
+            if n >= count:
+                return n
+            time.sleep(0.02)
+        return n
+
+
+# Commands
+def cmd_ports(_args):
+    ports = list(serial.tools.list_ports.comports())
+    if not ports:
+        print("no serial ports found - is the USB-serial adapter plugged in?")
+    for p in ports:
+        print(f"{p.device:15s} {p.description}")
+
+
+def cmd_regs(_args):
+    print("addr  name           notes")
+    for name, addr in REGS.items():
+        print(f"0x{addr:02X}  {name:14s} {REG_NOTES.get(name, 'RW job word')}")
+
+
+def cmd_read(m, args):
+    addr = parse_reg(args.reg)
+    data = m.read(addr)
+    print(f"{reg_name(addr)} = 0x{data:08X} ({data})")
+
+
+def cmd_write(m, args):
+    addr = parse_reg(args.reg)
+    m.write(addr, parse_int(args.value))
+    print(f"{reg_name(addr)} written, FPGA acked")
+
+
+def cmd_status(m, _args):
+    status = m.read(REGS["STATUS"])
+    count = m.read(REGS["FOUND_COUNT"])
+    print(f"STATUS = 0x{status:08X}: found pending = {bool(status & 2)}")
+    print(f"FOUND_COUNT = {count}")
+
+
+def cmd_dump(m, _args):
+    rows = []
+    for name, addr in MINER_REGS.items():
+        if name in DUMP_SKIP:
+            continue
+        rows.append((name, addr, m.read(addr)))
+    print()
+    for name, addr, val in rows:
+        print(f"0x{addr:02X}  {name:14s} 0x{val:08X}")
+    print("(CTRL is write-only and FOUND_NONCE0 pops the FIFO, so both are skipped)")
+
+
+def cmd_job(m, args):
+    pph, ts = parse_int(args.pph), parse_int(args.ts)
+    target, nonce = parse_int(args.target), parse_int(args.nonce)
+    m.load_job(pph, ts, target, nonce, start=not args.no_start)
+    print(f"job loaded: pph=0x{pph:064x}\n            ts={ts} target=0x{target:064x}"
+          f"\n            nonce_base=0x{nonce:016x}"
+          + ("" if args.no_start else "\nCTRL=1 written: job started"))
+
+
+def cmd_found(m, args):
+    if args.wait:
+        n = m.wait_found(1, args.wait)
+        if n == 0:
+            print(f"nothing found within {args.wait}s")
+            return
+    popped = 0
+    while True:
+        entry = m.pop_found()
+        if entry is None:
+            break
+        nonce, wid = entry
+        popped += 1
+        print(f"FOUND nonce=0x{nonce:016x} ({nonce})  work_id={wid}")
+        if not args.all:
+            break
+    if popped == 0:
+        print("found FIFO is empty")
+
+
+def cmd_badchk(m, args):
+    addr = parse_reg(args.reg)
+    rcmd, _ = m.transact(CMD_READ, addr, corrupt=True)
+    print("FPGA NACKed the bad frame, as it should" if rcmd == RESP_NACK
+          else f"unexpected: got {CMD_NAMES.get(rcmd, hex(rcmd))} instead of NACK")
+
+
+def cmd_raw(m, args):
+    data = bytes(int(b, 16) for b in args.bytes)
+    print(f">> {data.hex(' ')}")
+    m.ser.write(data)
+    time.sleep(0.2)
+    rx = m.ser.read(m.ser.in_waiting or 1)
+    print(f"<< {rx.hex(' ') or '(nothing)'}")
+
+
+def cmd_listen(m, _args):
+    print("listening - touch the RX wire to a J10 pin; Ctrl-C to stop")
+    m.ser.timeout = 0.2
+    try:
+        while True:
+            line = m.ser.readline()
+            if line:
+                text = line.decode("ascii", "replace").strip()
+                print(text if text else line.hex(" "), flush=True)
+    except KeyboardInterrupt:
+        print()
+
+
+def xadc_temp(raw):
+    return (raw >> 4) * 503.975 / 4096 - 273.15
+
+
+def xadc_volts(raw):
+    return (raw >> 4) / 4096 * 3.0
+
+
+def read_diag(m):
+    d = {n: m.read(a) for n, a in DIAG_REGS.items()}
+    if d["DIAG_ID"] != DIAG_ID:
+        raise ProtocolError(f"DIAG_ID reads 0x{d['DIAG_ID']:08X}, not 'DIAG' - "
+                            "diagnostics only exist in the uart test bitstream")
+    return d
+
+
+def cmd_diag(m, _args):
+    m.quiet = True
+    d = read_diag(m)
+    print(f"uptime       {d['UPTIME']} s")
+    print(f"FPGA temp    {xadc_temp(d['TEMP']):.1f} C   "
+          f"(min {xadc_temp(d['TEMP_MIN']):.1f}, max {xadc_temp(d['TEMP_MAX']):.1f})")
+    print(f"VCCINT       {xadc_volts(d['VCCINT']):.3f} V   (nominal 1.000)")
+    print(f"VCCAUX       {xadc_volts(d['VCCAUX']):.3f} V   (nominal 1.800)")
+    print(f"VCCBRAM      {xadc_volts(d['VCCBRAM']):.3f} V   (nominal 1.000)")
+    print(f"clock        {d['CLK_FREQ'] / 1e6:.2f} MHz (build setting)")
+    print(f"jobs {d['JOBS']}   finds {d['FINDS']}   valid requests {d['REQUESTS']}")
+
+
+def cmd_monitor(m, args):
+    m.quiet = True
+    print("time      uptime    temp(C)  max(C)  VCCINT  VCCAUX  VCCBRAM  jobs  finds  reqs  clk(MHz)")
+    prev = None
+    try:
+        while True:
+            t = time.monotonic()
+            d = read_diag(m)
+            clk = ""
+            if prev:
+                dt = t - prev[0]
+                clk = f"{((d['CYCLES'] - prev[1]) & MASK32) / dt / 1e6:8.2f}"
+            prev = (t, d["CYCLES"])
+            print(f"{time.strftime('%H:%M:%S')}  {d['UPTIME']:6d}s  {xadc_temp(d['TEMP']):7.1f}  "
+                  f"{xadc_temp(d['TEMP_MAX']):6.1f}  {xadc_volts(d['VCCINT']):6.3f}  "
+                  f"{xadc_volts(d['VCCAUX']):6.3f}  {xadc_volts(d['VCCBRAM']):7.3f}  "
+                  f"{d['JOBS']:4d}  {d['FINDS']:5d}  {d['REQUESTS']:4d}  {clk}", flush=True)
+            time.sleep(max(0.0, args.interval - (time.monotonic() - t)))
+    except KeyboardInterrupt:
+        print()
+
+
+def cmd_selftest(m, _args):
+    fails = 0
+
+    def check(name, ok, detail=""):
+        nonlocal fails
+        fails += not ok
+        print(f"[{'PASS' if ok else 'FAIL'}] {name}{'  ' + detail if detail else ''}")
+
+    m.quiet = True
+    rng = random.Random()
+
+    # Drain anything left over from earlier commands.
+    while m.pop_found():
+        pass
+
+    # 1. Every job word writes and reads back.
+    vals = {n: rng.getrandbits(32) for n in REGS
+            if n.startswith(("PPH", "TS", "TGT", "NONCE"))}
+    for n, v in vals.items():
+        m.write(REGS[n], v)
+    bad = [n for n, v in vals.items() if m.read(REGS[n]) != v]
+    check("job registers write/readback", not bad, f"{len(vals) - len(bad)}/{len(vals)}"
+          + (f" bad: {', '.join(bad)}" if bad else ""))
+
+    # 2. Empty FIFO behaviour.
+    check("STATUS idle", m.read(REGS["STATUS"]) & 2 == 0)
+    check("FOUND_NONCE0 on empty FIFO reads 0", m.read(REGS["FOUND_NONCE0"]) == 0)
+
+    # 3. Two jobs: fake_core reports base+42 then base+1337, work_id +1 per job.
+    prev_wid = None
+    for job in (1, 2):
+        base = rng.getrandbits(63)
+        m.load_job(rng.getrandbits(256), rng.getrandbits(64), (1 << 256) - 1, base)
+        n = m.wait_found(2, timeout=3.0)
+        check(f"job {job}: two finds reported", n == 2, f"FOUND_COUNT={n}")
+        check(f"job {job}: STATUS shows found pending", m.read(REGS["STATUS"]) & 2 != 0)
+        got = [m.pop_found() for _ in range(2)]
+        nonces = [g[0] if g else None for g in got]
+        wids = {g[1] for g in got if g}
+        check(f"job {job}: found nonces", nonces == [base + 42, base + 1337],
+              f"base=0x{base:x} got {[hex(x) if x is not None else None for x in nonces]}")
+        check(f"job {job}: work_id consistent", len(wids) == 1, f"{sorted(wids)}")
+        if prev_wid is not None and len(wids) == 1:
+            wid = wids.pop()
+            check(f"job {job}: work_id incremented", wid == (prev_wid + 1) & 0xFF,
+                  f"{prev_wid} -> {wid}")
+            prev_wid = wid
+        elif len(wids) == 1:
+            prev_wid = wids.pop()
+        check(f"job {job}: FIFO drained", m.read(REGS["FOUND_COUNT"]) == 0)
+
+    # 4. Diagnostics block (debug bitstream only).
+    d = read_diag(m)
+    temp, vint, vaux = xadc_temp(d["TEMP"]), xadc_volts(d["VCCINT"]), xadc_volts(d["VCCAUX"])
+    check("diag: FPGA temperature plausible", 0 < temp < 100, f"{temp:.1f} C")
+    check("diag: VCCINT near 1.0 V", 0.90 < vint < 1.10, f"{vint:.3f} V")
+    check("diag: VCCAUX near 1.8 V", 1.70 < vaux < 1.90, f"{vaux:.3f} V")
+    check("diag: job counter saw both jobs", d["JOBS"] >= 2, f"JOBS={d['JOBS']}")
+    check("diag: find counter saw all 4 finds", d["FINDS"] >= 4, f"FINDS={d['FINDS']}")
+
+    # 5. Error handling.
+    rcmd, _ = m.transact(CMD_READ, REGS["STATUS"], corrupt=True)
+    check("bad checksum gets NACK", rcmd == RESP_NACK)
+    m.ser.write(bytes([0x13, 0x37, 0x00]))
+    ok = True
+    try:
+        m.read(REGS["STATUS"])
+    except ProtocolError:
+        ok = False
+    check("resyncs after garbage bytes", ok)
+
+    print("ALL PASSED" if fails == 0 else f"{fails} CHECK(S) FAILED")
+    return 1 if fails else 0
+
+
+def cmd_verify(m, args):
+    # The miner only reports nonces whose hash met the target, so check each
+    # reported nonce by recomputing its hash with the Python reference.
+    # Imported here so every other command works without pycryptodome.
+    ref_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "..", "..", "software", "referance")
+    sys.path.insert(0, ref_dir)
+    try:
+        from kheavyhash_ref import KHeavyhash
+    except ImportError as e:
+        sys.exit(f"can't load the reference from {os.path.normpath(ref_dir)}: {e}")
+
+    # Same block as hw/core/sim/gen_vectors.py (BLOCK_A, TS)
+    pph = bytes.fromhex("deadbeefcafebabe0123456789abcdef0123456789abcdeffeedfacedeadbeef")
+    ts = 1_700_000_000
+    base = parse_int(args.nonce) if args.nonce is not None else random.getrandbits(48)
+    # About 1 find per 2**bits hashes; the FIFO only holds 4, so keep finds
+    # rare enough that polling over UART keeps up.
+    target = (1 << (256 - args.bits)) - 1
+    kh = KHeavyhash()
+    m.quiet = True
+
+    # Park the miner on an impossible target so finds from an earlier job
+    # (e.g. an all-ones `job`) stop arriving, then drain them.
+    m.load_job(0, 0, 0, 0)
+    time.sleep(0.2)
+    while m.pop_found():
+        pass
+
+    print(f"job: pph={pph.hex()[:16]}... ts={ts} nonce_base=0x{base:x} "
+          f"target=2^{256 - args.bits}-1 (~1 find per 2^{args.bits} hashes)")
+    m.load_job(int.from_bytes(pph, "little"), ts, target, base)
+    t0 = time.monotonic()
+
+    fails = found = 0
+    last = None
+    while found < args.count and time.monotonic() - t0 < args.timeout:
+        entry = m.pop_found()
+        if entry is None:
+            time.sleep(0.01)
+            continue
+        nonce, wid = entry
+        found += 1
+        last = nonce
+        h = int.from_bytes(kh.hash(pph, ts, nonce), "little")
+        ok = nonce >= base and h <= target
+        fails += not ok
+        why = "" if ok else ("  below nonce base" if nonce < base else "  hash > target")
+        print(f"[{'PASS' if ok else 'FAIL'}] nonce=0x{nonce:x} (+{nonce - base})  "
+              f"hash=0x{h:064x}  work_id={wid}{why}")
+    elapsed = time.monotonic() - t0
+
+    if last is not None and last >= base:
+        print(f"rate: >= {(last - base) / elapsed / 1e6:.2f} MH/s "
+              f"({last - base} nonces in {elapsed:.1f}s)")
+    if found < args.count:
+        print(f"only {found}/{args.count} finds in {args.timeout:.0f}s - "
+              f"try a smaller --bits or a longer --timeout")
+    print("ALL PASSED" if fails == 0 and found == args.count else f"FAILED ({fails} bad)")
+    return 1 if fails or found < args.count else 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="uart", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--port", default=os.environ.get("UART_PORT"),
+                    help="serial port (default: $UART_PORT)")
+    ap.add_argument("--baud", type=int, default=int(os.environ.get("UART_BAUD", 115200)))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("ports")
+    sub.add_parser("regs")
+    p = sub.add_parser("read");   p.add_argument("reg")
+    p = sub.add_parser("write");  p.add_argument("reg"); p.add_argument("value")
+    sub.add_parser("status")
+    sub.add_parser("dump")
+    p = sub.add_parser("job")
+    p.add_argument("--pph", default="0")
+    p.add_argument("--ts", default="0")
+    p.add_argument("--target", default=hex((1 << 256) - 1),
+                   help="default all-ones: every nonce is a find")
+    p.add_argument("--nonce", default="0")
+    p.add_argument("--no-start", action="store_true")
+    p = sub.add_parser("found")
+    p.add_argument("--all", action="store_true", help="pop until empty")
+    p.add_argument("--wait", type=float, default=0, help="wait up to SEC for a find")
+    p = sub.add_parser("badchk"); p.add_argument("reg", nargs="?", default="STATUS")
+    p = sub.add_parser("raw");    p.add_argument("bytes", nargs="+")
+    sub.add_parser("listen")
+    sub.add_parser("diag")
+    p = sub.add_parser("monitor")
+    p.add_argument("--interval", type=float, default=1.0)
+    sub.add_parser("selftest")
+    p = sub.add_parser("verify")
+    p.add_argument("--bits", type=int, default=22,
+                   help="target = 2^(256-bits)-1, ~1 find per 2^bits hashes (default 22)")
+    p.add_argument("--count", type=int, default=5, help="finds to check (default 5)")
+    p.add_argument("--timeout", type=float, default=60, help="give up after SEC (default 60)")
+    p.add_argument("--nonce", default=None, help="nonce base (default random)")
+    args = ap.parse_args()
+
+    if args.cmd == "ports":
+        return cmd_ports(args)
+    if args.cmd == "regs":
+        return cmd_regs(args)
+    if not args.port:
+        sys.exit("no port given: use --port COM5 (or set UART_PORT). "
+                 "Available: " + (", ".join(p.device for p in serial.tools.list_ports.comports())
+                                  or "none"))
+
+    m = Miner(args.port, args.baud)
+    handler = {"read": cmd_read, "write": cmd_write, "status": cmd_status,
+               "dump": cmd_dump, "job": cmd_job, "found": cmd_found,
+               "badchk": cmd_badchk, "raw": cmd_raw, "listen": cmd_listen, "diag": cmd_diag, "monitor": cmd_monitor,
+               "selftest": cmd_selftest, "verify": cmd_verify}[args.cmd]
+    return handler(m, args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except ProtocolError as e:
+        sys.exit(f"ERROR: {e}\n(no reply usually means TX/RX swapped, wrong port, "
+                 "baud mismatch, or the bitstream isn't loaded)")
+    except serial.SerialException as e:
+        sys.exit(f"ERROR: {e}")
