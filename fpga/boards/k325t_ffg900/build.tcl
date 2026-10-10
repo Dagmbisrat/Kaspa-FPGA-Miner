@@ -54,8 +54,8 @@ switch -- $TARGET {
                                    "$SCRIPT_DIR/kaspa_miner_top.sv"]]
         lappend XDCS "$SCRIPT_DIR/diag_uart.xdc"
         lappend IMPL_XDCS "$SCRIPT_DIR/miner_floorplan.xdc"
-        set DEFAULTS [list CLK_DIV 10 BAUD_RATE 115200 \
-                           CSHAKE_STAGES 4 MATMUL_STAGES 8 CSHAKE_FOLDED 1]
+        set DEFAULTS [list CLK_DIV 18 BAUD_RATE 115200 \
+                           CSHAKE_STAGES 4 MATMUL_STAGES 32 CSHAKE_FOLDED 1]
     }
     default { error "build.tcl: unknown target '$TARGET' (expected blinky, uart or miner)" }
 }
