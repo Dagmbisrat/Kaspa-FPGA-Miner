@@ -137,28 +137,48 @@ catch {set_param synth.maxThreads [expr {min($JOBS, 4)}]}
 # SYNTH_ARGS="<opts>" adds synth_design options, e.g. -no_timing_driven.
 set SYNTH_EXTRA [expr {[info exists ::env(SYNTH_ARGS)] ? $::env(SYNTH_ARGS) : ""}]
 
+# PLACE_DIRECTIVE / ROUTE_DIRECTIVE=<name> pass -directive to place_design /
+# route_design, e.g. AltSpreadLogic_high / AlternateCLBRouting for congestion.
+set PLACE_DIR [expr {[info exists ::env(PLACE_DIRECTIVE)] ? $::env(PLACE_DIRECTIVE) : ""}]
+set ROUTE_DIR [expr {[info exists ::env(ROUTE_DIRECTIVE)] ? $::env(ROUTE_DIRECTIVE) : ""}]
+
+# REUSE_SYNTH=1 skips synthesis and starts from this config's saved
+# <top>_synth.dcp (same parameters -> same OUT_DIR). The checkpoint holds the
+# RTL and XDC as they were then, so don't use it after editing either.
+set REUSE_SYNTH [expr {[info exists ::env(REUSE_SYNTH)] && $::env(REUSE_SYNTH) eq "1"}]
+set SYNTH_DCP   "$OUT_DIR/${TOP}_synth.dcp"
+if {$REUSE_SYNTH && ![file exists $SYNTH_DCP]} {
+    error "build.tcl: REUSE_SYNTH=1 but $SYNTH_DCP doesn't exist - build once without it"
+}
 
 puts "==== Building $TOP for $PART -> $OUT_DIR ===="
 if {[llength $GENERICS] > 0} { puts "  parameters: $GENERICS" }
 puts "  jobs: $JOBS"
 if {$SYNTH_EXTRA ne ""} { puts "  synth args: $SYNTH_EXTRA" }
+if {$REUSE_SYNTH}       { puts "  reusing:    $SYNTH_DCP" }
+if {$PLACE_DIR ne ""}   { puts "  place directive: $PLACE_DIR" }
+if {$ROUTE_DIR ne ""}   { puts "  route directive: $ROUTE_DIR" }
 if {[info exists CLK_HZ]}   { puts [format "  fabric clock: %.2f MHz" [expr {$CLK_HZ/1e6}]] }
 foreach w $warnings { puts "  WARNING: $w" }
 
 # Build
-read_verilog -sv $SRCS
-read_xdc $XDCS
+if {$REUSE_SYNTH} {
+    open_checkpoint $SYNTH_DCP
+} else {
+    read_verilog -sv $SRCS
+    read_xdc $XDCS
 
-set synth_args [list -top $TOP -part $PART]
-foreach g $GENERICS { lappend synth_args -generic $g }
-lappend synth_args {*}$SYNTH_EXTRA
-synth_design {*}$synth_args
-write_checkpoint -force "$OUT_DIR/${TOP}_synth.dcp"
+    set synth_args [list -top $TOP -part $PART]
+    foreach g $GENERICS { lappend synth_args -generic $g }
+    lappend synth_args {*}$SYNTH_EXTRA
+    synth_design {*}$synth_args
+    write_checkpoint -force $SYNTH_DCP
+}
 
 opt_design
-place_design
+place_design {*}[expr {$PLACE_DIR ne "" ? [list -directive $PLACE_DIR] : {}}]
 phys_opt_design
-route_design
+route_design {*}[expr {$ROUTE_DIR ne "" ? [list -directive $ROUTE_DIR] : {}}]
 write_checkpoint -force "$OUT_DIR/${TOP}_routed.dcp"
 
 report_utilization    -file "$OUT_DIR/${TOP}_utilization.rpt"
@@ -191,6 +211,9 @@ set summary {}
 lappend summary "target      $TARGET ($TOP) on $PART"
 lappend summary "parameters  $GENERICS"
 if {[info exists CLK_HZ]} { lappend summary [format "clock       %.2f MHz" [expr {$CLK_HZ/1e6}]] }
+if {$PLACE_DIR ne "" || $ROUTE_DIR ne ""} {
+    lappend summary "directives  place [expr {$PLACE_DIR ne {} ? $PLACE_DIR : {default}}], route [expr {$ROUTE_DIR ne {} ? $ROUTE_DIR : {default}}]"
+}
 lappend summary "timing      WNS $wns ns, WHS $whs ns -> [expr {$timing_ok ? {MET} : {FAILED}}]"
 lappend summary "LUTs        [util_pct $rpt {Slice LUTs}]"
 lappend summary "FFs         [util_pct $rpt {Slice Registers}]"
