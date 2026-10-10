@@ -30,6 +30,7 @@ set MINER_SRCS [list \
 ]
 set BOARD_SRCS [list "$SCRIPT_DIR/board_clk_rst.sv" "$SCRIPT_DIR/board_status_leds.sv"]
 set XDCS       [list "$SCRIPT_DIR/k325t_ffg900.xdc"]
+set IMPL_XDCS  {}
 
 switch -- $TARGET {
     blinky {
@@ -52,6 +53,7 @@ switch -- $TARGET {
                              [list "$SCRIPT_DIR/board_xadc.sv" "$SCRIPT_DIR/board_diag_uart.sv" \
                                    "$SCRIPT_DIR/kaspa_miner_top.sv"]]
         lappend XDCS "$SCRIPT_DIR/diag_uart.xdc"
+        lappend IMPL_XDCS "$SCRIPT_DIR/miner_floorplan.xdc"
         set DEFAULTS [list CLK_DIV 10 BAUD_RATE 115200 \
                            CSHAKE_STAGES 4 MATMUL_STAGES 8 CSHAKE_FOLDED 1]
     }
@@ -145,6 +147,7 @@ set ROUTE_DIR [expr {[info exists ::env(ROUTE_DIRECTIVE)] ? $::env(ROUTE_DIRECTI
 # REUSE_SYNTH=1 skips synthesis and starts from this config's saved
 # <top>_synth.dcp (same parameters -> same OUT_DIR). The checkpoint holds the
 # RTL and XDC as they were then, so don't use it after editing either.
+# IMPL_XDCS (floorplan) are read after synthesis, so they always apply.
 set REUSE_SYNTH [expr {[info exists ::env(REUSE_SYNTH)] && $::env(REUSE_SYNTH) eq "1"}]
 set SYNTH_DCP   "$OUT_DIR/${TOP}_synth.dcp"
 if {$REUSE_SYNTH && ![file exists $SYNTH_DCP]} {
@@ -174,6 +177,7 @@ if {$REUSE_SYNTH} {
     synth_design {*}$synth_args
     write_checkpoint -force $SYNTH_DCP
 }
+if {[llength $IMPL_XDCS]} { read_xdc $IMPL_XDCS }
 
 opt_design
 place_design {*}[expr {$PLACE_DIR ne "" ? [list -directive $PLACE_DIR] : {}}]
