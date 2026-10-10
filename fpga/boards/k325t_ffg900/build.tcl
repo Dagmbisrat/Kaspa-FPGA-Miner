@@ -1,11 +1,17 @@
 # Build a bitstream for the board.
 #   vivado -mode batch -source build.tcl -tclargs <target> [KEY=VALUE ...]
-# Targets: blinky, pinfinder, uart, miner. Output: build/<target>/
+# Targets: blinky, uart, miner. Output: build/<target>/
 
 set SCRIPT_DIR [file dirname [file normalize [info script]]]
 set REPO_ROOT  [file normalize "$SCRIPT_DIR/../../.."]
 set PART       xc7k325tffg900-1
 
+# VIVADO_TMP=<dir> puts .Xil there instead of the launch folder.
+if {[info exists ::env(VIVADO_TMP)]} { file mkdir $::env(VIVADO_TMP); cd $::env(VIVADO_TMP) }
+
+# fpga/vivado.sh quotes KEY=VALUE args so vivado.bat doesn't split them on
+# '='; the quotes come through, so drop them
+set argv [lmap a $argv {string trim $a "\""}]
 set TARGET [expr {[llength $argv] >= 1 ? [lindex $argv 0] : "blinky"}]
 
 # Targets
@@ -26,12 +32,6 @@ set BOARD_SRCS [list "$SCRIPT_DIR/board_clk_rst.sv" "$SCRIPT_DIR/board_status_le
 set XDCS       [list "$SCRIPT_DIR/k325t_ffg900.xdc"]
 
 switch -- $TARGET {
-    pinfinder {
-        set TOP      pinfinder_top
-        set SRCS     [list "$SCRIPT_DIR/pinfinder_top.sv"]
-        set XDCS     [list "$SCRIPT_DIR/pinfinder.xdc"]
-        set DEFAULTS {}
-    }
     blinky {
         set TOP      blinky_top
         set SRCS     [list "$SCRIPT_DIR/blinky_top.sv"]
@@ -55,7 +55,7 @@ switch -- $TARGET {
         set DEFAULTS [list CLK_DIV 10 BAUD_RATE 115200 \
                            CSHAKE_STAGES 4 MATMUL_STAGES 8 CSHAKE_FOLDED 1]
     }
-    default { error "build.tcl: unknown target '$TARGET' (expected blinky, pinfinder, uart or miner)" }
+    default { error "build.tcl: unknown target '$TARGET' (expected blinky, uart or miner)" }
 }
 
 # Parameters
@@ -125,19 +125,33 @@ foreach f $SRCS {
 }
 
 file mkdir $OUT_DIR
-set_param general.maxThreads 8
+
+# JOBS=<n> caps Vivado threads/helper processes (default 8). Lower = less RAM.
+set JOBS [expr {[info exists ::env(JOBS)] ? $::env(JOBS) : 8}]
+if {![string is integer -strict $JOBS] || $JOBS < 1 || $JOBS > 32} {
+    error "build.tcl: JOBS=$JOBS must be 1..32"
+}
+set_param general.maxThreads $JOBS
+catch {set_param synth.maxThreads [expr {min($JOBS, 4)}]}
+
+# SYNTH_ARGS="<opts>" adds synth_design options, e.g. -no_timing_driven.
+set SYNTH_EXTRA [expr {[info exists ::env(SYNTH_ARGS)] ? $::env(SYNTH_ARGS) : ""}]
+
 
 puts "==== Building $TOP for $PART -> $OUT_DIR ===="
 if {[llength $GENERICS] > 0} { puts "  parameters: $GENERICS" }
+puts "  jobs: $JOBS"
+if {$SYNTH_EXTRA ne ""} { puts "  synth args: $SYNTH_EXTRA" }
 if {[info exists CLK_HZ]}   { puts [format "  fabric clock: %.2f MHz" [expr {$CLK_HZ/1e6}]] }
 foreach w $warnings { puts "  WARNING: $w" }
 
 # Build
 read_verilog -sv $SRCS
-foreach x $XDCS { read_xdc $x }
+read_xdc $XDCS
 
 set synth_args [list -top $TOP -part $PART]
 foreach g $GENERICS { lappend synth_args -generic $g }
+lappend synth_args {*}$SYNTH_EXTRA
 synth_design {*}$synth_args
 write_checkpoint -force "$OUT_DIR/${TOP}_synth.dcp"
 
@@ -156,12 +170,16 @@ set wns [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]]
 set whs [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -hold]]
 
 write_bitstream -force "$OUT_DIR/${TOP}.bit"
+# -loadbit splits its path on spaces even when quoted, so run from OUT_DIR
+# and pass bare file names (the repo may live under e.g. C:/Users/First Last)
+set here [pwd]; cd $OUT_DIR
 write_cfgmem -force -format mcs -size 16 -interface SPIx4 \
-    -loadbit "up 0x0 $OUT_DIR/${TOP}.bit" "$OUT_DIR/${TOP}.mcs"
+    -loadbit "up 0x0 ${TOP}.bit" "${TOP}.mcs"
+cd $here
 
 proc util_pct {rpt label} {
     set fh [open $rpt r]; set data [read $fh]; close $fh
-    if {[regexp "\\|\\s*$label\\*?\\s*\\|\\s*(\\d+)\\s*\\|\[^\\n\]*?\\|\\s*(\[0-9.\]+)\\s*\\|\\s*\\n" $data -> used pct]} {
+    if {[regexp "\\|\\s*$label\\*?\\s*\\|\\s*(\\d+)\\s*\\|\[^\\n\]*?\\|\\s*(<?\[0-9.\]+)\\s*\\|\\s*\\n" $data -> used pct]} {
         return "$used ($pct%)"
     }
     return "?"
