@@ -19,6 +19,10 @@ Commands:
   diag                           temperature, voltages, uptime, counters (debug bitstream)
   monitor [--interval SEC]       live diag log, one line per interval, Ctrl-C to stop
   selftest                       full check - uart_test bitstream only (fake finds)
+  verify [--bits N] [--count N] [--timeout SEC] [--nonce N]
+                                 real miner: mine a real job, check every found
+                                 nonce against the Python reference (needs
+                                 pycryptodome and this folder in a repo checkout)
 
 Frame: AA CMD ADDR D0 D1 D2 D3 CHK (little-endian, CHK = XOR(CMD..D3)).
 """
@@ -426,6 +430,68 @@ def cmd_selftest(m, _args):
     return 1 if fails else 0
 
 
+def cmd_verify(m, args):
+    # The miner only reports nonces whose hash met the target, so check each
+    # reported nonce by recomputing its hash with the Python reference.
+    # Imported here so every other command works without pycryptodome.
+    ref_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "..", "..", "software", "referance")
+    sys.path.insert(0, ref_dir)
+    try:
+        from kheavyhash_ref import KHeavyhash
+    except ImportError as e:
+        sys.exit(f"can't load the reference from {os.path.normpath(ref_dir)}: {e}")
+
+    # Same block as hw/core/sim/gen_vectors.py (BLOCK_A, TS)
+    pph = bytes.fromhex("deadbeefcafebabe0123456789abcdef0123456789abcdeffeedfacedeadbeef")
+    ts = 1_700_000_000
+    base = parse_int(args.nonce) if args.nonce is not None else random.getrandbits(48)
+    # About 1 find per 2**bits hashes; the FIFO only holds 4, so keep finds
+    # rare enough that polling over UART keeps up.
+    target = (1 << (256 - args.bits)) - 1
+    kh = KHeavyhash()
+    m.quiet = True
+
+    # Park the miner on an impossible target so finds from an earlier job
+    # (e.g. an all-ones `job`) stop arriving, then drain them.
+    m.load_job(0, 0, 0, 0)
+    time.sleep(0.2)
+    while m.pop_found():
+        pass
+
+    print(f"job: pph={pph.hex()[:16]}... ts={ts} nonce_base=0x{base:x} "
+          f"target=2^{256 - args.bits}-1 (~1 find per 2^{args.bits} hashes)")
+    m.load_job(int.from_bytes(pph, "little"), ts, target, base)
+    t0 = time.monotonic()
+
+    fails = found = 0
+    last = None
+    while found < args.count and time.monotonic() - t0 < args.timeout:
+        entry = m.pop_found()
+        if entry is None:
+            time.sleep(0.01)
+            continue
+        nonce, wid = entry
+        found += 1
+        last = nonce
+        h = int.from_bytes(kh.hash(pph, ts, nonce), "little")
+        ok = nonce >= base and h <= target
+        fails += not ok
+        why = "" if ok else ("  below nonce base" if nonce < base else "  hash > target")
+        print(f"[{'PASS' if ok else 'FAIL'}] nonce=0x{nonce:x} (+{nonce - base})  "
+              f"hash=0x{h:064x}  work_id={wid}{why}")
+    elapsed = time.monotonic() - t0
+
+    if last is not None and last >= base:
+        print(f"rate: >= {(last - base) / elapsed / 1e6:.2f} MH/s "
+              f"({last - base} nonces in {elapsed:.1f}s)")
+    if found < args.count:
+        print(f"only {found}/{args.count} finds in {args.timeout:.0f}s - "
+              f"try a smaller --bits or a longer --timeout")
+    print("ALL PASSED" if fails == 0 and found == args.count else f"FAILED ({fails} bad)")
+    return 1 if fails or found < args.count else 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="uart", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -457,6 +523,12 @@ def main():
     p = sub.add_parser("monitor")
     p.add_argument("--interval", type=float, default=1.0)
     sub.add_parser("selftest")
+    p = sub.add_parser("verify")
+    p.add_argument("--bits", type=int, default=22,
+                   help="target = 2^(256-bits)-1, ~1 find per 2^bits hashes (default 22)")
+    p.add_argument("--count", type=int, default=5, help="finds to check (default 5)")
+    p.add_argument("--timeout", type=float, default=60, help="give up after SEC (default 60)")
+    p.add_argument("--nonce", default=None, help="nonce base (default random)")
     args = ap.parse_args()
 
     if args.cmd == "ports":
@@ -472,7 +544,7 @@ def main():
     handler = {"read": cmd_read, "write": cmd_write, "status": cmd_status,
                "dump": cmd_dump, "job": cmd_job, "found": cmd_found,
                "badchk": cmd_badchk, "raw": cmd_raw, "listen": cmd_listen, "diag": cmd_diag, "monitor": cmd_monitor,
-               "selftest": cmd_selftest}[args.cmd]
+               "selftest": cmd_selftest, "verify": cmd_verify}[args.cmd]
     return handler(m, args)
 
 
