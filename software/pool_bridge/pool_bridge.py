@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import stratum
-from stratum import Job, MAX_TARGET
+from stratum import Job
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -38,6 +38,10 @@ RESYNC_AFTER = 3        # consecutive bad finds before re-learning work_id
 # with zeros, so matrix generation never finds a full-rank matrix.
 SYNC_PPH = int.from_bytes(bytes.fromhex(
     "deadbeefcafebabe0123456789abcdef0123456789abcdeffeedfacedeadbeef"), "little")
+# ~1 find per 2^20 hashes (~6/s at 6.5 MH/s). Not all-ones: work_controller's
+# FIFO keeps advancing its write pointer when full, so an overflow leaves the
+# read side lagging (pops return old entries) until the next reset.
+SYNC_TARGET = (1 << 236) - 1
 
 
 @dataclass(frozen=True)
@@ -117,15 +121,15 @@ class MinerWorker(threading.Thread):
 
     def sync(self):
         """Learn the core's current work_id (it can't be read directly): run
-        an all-ones-target job so the first find carries its id, then park on
-        an impossible target and drain the FIFO."""
+        an easy-target job so the first find carries its id, then park on an
+        impossible target and drain the FIFO."""
         self.m.forget()
-        self.m.load_job(SYNC_PPH, 0, MAX_TARGET, 0)
-        deadline = time.monotonic() + 2.0
+        self.m.load_job(SYNC_PPH, 0, SYNC_TARGET, 0)
+        deadline = time.monotonic() + 5.0
         found = None
         while found is None:
             if time.monotonic() > deadline:
-                raise SyncError("no find from an all-ones target - is the miner bitstream loaded?")
+                raise SyncError("no find from the sync job - is the miner bitstream loaded?")
             found = self.m.pop_found()
         self.m.load_job(SYNC_PPH, 0, 0, 0)
         time.sleep(0.05)

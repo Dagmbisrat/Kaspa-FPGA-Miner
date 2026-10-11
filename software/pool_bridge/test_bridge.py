@@ -16,6 +16,8 @@ from test_stratum import ksb_job_header, ksb_large_job
 sys.path.insert(0, pool_bridge.REF_DIR)
 from kheavyhash_ref import KHeavyhash  # noqa: E402
 
+# The fake miner hashes in Python: sync on all-ones (it has no FIFO overflow bug)
+pool_bridge.SYNC_TARGET = stratum.MAX_TARGET
 # ~1 share per 16 hashes, so the reference can "mine" it quickly
 SHARE_DIFF = 2.0 ** -28
 EXTRANONCE = "00ab"
